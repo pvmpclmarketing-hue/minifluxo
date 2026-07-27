@@ -10,5 +10,6 @@ export default async function DashboardPage() {
   if (!user) redirect('/login');
   const { data: leads = [] } = await supabase.from('leads').select('*').order('created_at', { ascending: false }).limit(30);
   const { data: connections = [] } = await supabase.from('connections').select('*').order('created_at', { ascending: false });
-  return <Dashboard userEmail={user.email} initialLeads={leads} initialConnections={connections} />;
+  const { data: flows = [] } = await supabase.from('flows').select('*').order('created_at', { ascending: false });
+  return <Dashboard userEmail={user.email} initialLeads={leads || []} initialConnections={connections || []} initialFlows={flows || []} />;
 }
