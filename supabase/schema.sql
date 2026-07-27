@@ -15,7 +15,7 @@ create table if not exists public.leads (
   owner_id uuid not null references auth.users(id) on delete cascade,
   name text not null,
   phone text not null,
-  source text not null check (source in ('site', 'manual')),
+  source text not null check (source in ('site', 'manual', 'payment')),
   music_request text,
   status text not null default 'waiting_pix',
   provider text,
@@ -37,12 +37,24 @@ create table if not exists public.flows (
   updated_at timestamptz not null default now()
 );
 
+create table if not exists public.connection_flow_configs (
+  connection_id uuid primary key references public.connections(id) on delete cascade,
+  owner_id uuid not null references auth.users(id) on delete cascade,
+  payment_flow_id uuid references public.flows(id) on delete set null,
+  site_flow_id uuid references public.flows(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
 alter table public.connections enable row level security;
 alter table public.leads enable row level security;
 alter table public.flows enable row level security;
+alter table public.connection_flow_configs enable row level security;
 drop policy if exists "users access own connections" on public.connections;
 drop policy if exists "users access own leads" on public.leads;
 drop policy if exists "users access own flows" on public.flows;
+drop policy if exists "users access own connection flow configs" on public.connection_flow_configs;
 create policy "users access own connections" on public.connections for all using (auth.uid() = owner_id) with check (auth.uid() = owner_id);
 create policy "users access own leads" on public.leads for all using (auth.uid() = owner_id) with check (auth.uid() = owner_id);
 create policy "users access own flows" on public.flows for all using (auth.uid() = owner_id) with check (auth.uid() = owner_id);
+create policy "users access own connection flow configs" on public.connection_flow_configs for all using (auth.uid() = owner_id) with check (auth.uid() = owner_id);
