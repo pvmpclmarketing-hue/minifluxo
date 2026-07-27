@@ -1,0 +1,3 @@
+import { NextResponse } from 'next/server';
+import { adminClient, requireUser } from '../supabase';
+export async function POST(request) { try { const user=await requireUser(); const body=await request.json(); if (!['meta','uazapi'].includes(body.provider) || !body.name) return NextResponse.json({error:'Dados da conexão inválidos.'},{status:400}); const {data,error}=await adminClient().from('connections').insert({owner_id:user.id,name:body.name,provider:body.provider,instance_name:body.instance_name||null}).select().single(); if(error) throw error; return NextResponse.json(data,{status:201}); } catch(error) { return NextResponse.json({error:error.message},{status:401}); } }

@@ -1,0 +1,36 @@
+[
+  {
+    "id": "d7f1df95-594b-4c29-87c0-f07647655c88",
+    "name": "Teste Final",
+    "phone": "5511999998888",
+    "musicRequest": "",
+    "source": "manual",
+    "status": "WAITING_PIX",
+    "createdAt": "2026-07-26T23:42:20.283Z",
+    "updatedAt": "2026-07-26T23:42:20.283Z",
+    "history": [
+      {
+        "at": "2026-07-26T23:42:20.283Z",
+        "event": "Fluxo iniciado",
+        "detail": "manual"
+      }
+    ]
+  },
+  {
+    "id": "0aa8c3ab-a4d9-4900-b0ca-69d863e006d0",
+    "name": "Teste Local",
+    "phone": "5511999999999",
+    "musicRequest": "",
+    "source": "manual",
+    "status": "WAITING_PIX",
+    "createdAt": "2026-07-26T23:41:28.978Z",
+    "updatedAt": "2026-07-26T23:41:28.978Z",
+    "history": [
+      {
+        "at": "2026-07-26T23:41:28.978Z",
+        "event": "Fluxo iniciado",
+        "detail": "manual"
+      }
+    ]
+  }
+]

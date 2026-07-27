@@ -1,0 +1,2 @@
+import { NextResponse } from 'next/server';
+export async function POST(request) { const body=await request.json(); if(body.EventType !== 'messages' && body.event !== 'messages') return NextResponse.json({received:true}); const phone=body?.data?.key?.remoteJid?.replace('@s.whatsapp.net','') || body?.data?.from; console.log('Mensagem UazAPI recebida de', phone); return NextResponse.json({received:true}); }

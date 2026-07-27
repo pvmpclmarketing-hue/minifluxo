@@ -1,0 +1,5 @@
+import { NextResponse } from 'next/server';
+import { adminClient, requireUser } from '../supabase';
+import { sendText } from '../provider';
+
+export async function POST(request) { try { const user = await requireUser(); const body = await request.json(); const phone = String(body.phone || '').replace(/\D/g,''); if (!body.name || !phone) return NextResponse.json({error:'Nome e telefone são obrigatórios.'},{status:400}); const db=adminClient(); const {data:connection}=await db.from('connections').select('*').eq('owner_id',user.id).eq('status','connected').limit(1).maybeSingle(); if(!connection) return NextResponse.json({error:'Conecte e ative um WhatsApp antes de iniciar o atendimento.'},{status:400}); const {data,error}=await db.from('leads').insert({owner_id:user.id,name:body.name,phone,source:'manual',status:'waiting_pix',provider:connection.provider}).select().single(); if(error) throw error; await sendText(connection,data.phone,`Olá, ${data.name}! Para começarmos sua música, envie aqui o comprovante do Pix.`); return NextResponse.json(data,{status:201}); } catch(error) { return NextResponse.json({error:error.message},{status:500}); } }
