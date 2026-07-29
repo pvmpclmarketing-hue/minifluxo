@@ -34,6 +34,7 @@ export default function Dashboard({userEmail,initialLeads,initialConnections,ini
   const createLead=event=>submit('/api/leads',event,item=>{setLeads([item,...leads]);setModal('');});
   const createConnection=event=>submit('/api/connections',event,item=>{setConnections([...connections,item]);setModal('');});
   const saveConfig=event=>submit('/api/dispatch-config',event,item=>{setConfigs([...configs.filter(config=>config.connection_id!==item.connection_id),item]);setError('Configuracao salva.');});
+  async function deleteContact(id){if(!window.confirm('Apagar este contato? Se ele chamar novamente, o fluxo sera iniciado do zero.'))return;setError('');const response=await fetch(`/api/leads/${id}`,{method:'DELETE'});if(!response.ok){const data=await response.json();return setError(data.error||'Nao foi possivel apagar o contato.');}setLeads(current=>current.filter(item=>item.id!==id));}
 
   return <div className="shell">
     <aside className="side">
@@ -47,7 +48,7 @@ export default function Dashboard({userEmail,initialLeads,initialConnections,ini
       {tab==='flows'&&<Flows flows={flows} open={item=>{setSelected(item);setTab('flow');}} create={()=>setModal('flow')}/>}
       {tab==='flow'&&(selected?<FlowCanvas flow={selected}/>:<Empty text="Crie seu primeiro fluxo."/>)}
       {tab==='leads'&&<Leads leads={leads}/>}
-      {tab==='contacts'&&<ContactsHistory leads={leads}/>}
+      {tab==='contacts'&&<ContactsHistoryWithDelete leads={leads} remove={deleteContact}/>}
       {tab==='connections'&&<ConnectionsPanel items={connections} onConnectionsChange={setConnections}/>}
       {tab==='dispatches'&&<Dispatches connections={connections} flows={flows} configs={configs} save={saveConfig}/>}
       {tab==='webhooks'&&<Webhooks origin={origin} connections={connections}/>}
@@ -67,3 +68,4 @@ function ContactsHistory({leads}){const formatDate=value=>value?new Intl.DateTim
 function Metric({label,value}){return <article className="metric"><small>{label}</small><b>{value}</b></article>}
 function Empty({text}){return <div className="empty"><p>{text}</p></div>}
 function Modal({title,close,error,children}){return <div className="modal-wrap"><div className="modal"><button className="close" onClick={close}>x</button><p className="eyebrow">WHATSENTREGAVEL</p><h2>{title}</h2>{error&&<p className="form-error">{error}</p>}{children}</div></div>}
+function ContactsHistoryWithDelete({leads,remove}){const formatDate=value=>value?new Intl.DateTimeFormat('pt-BR',{dateStyle:'short',timeStyle:'short'}).format(new Date(value)):'-';return <section className="table-card"><div className="table-head"><div><h2>Historico de contatos</h2><small>Pessoas que iniciaram conversa ou receberam um disparo.</small></div></div>{leads.length?<div className="lead-list">{leads.map(item=><article key={item.id} className="lead-row"><div className="avatar">{(item.name||'C')[0]}</div><div><b>{item.name||'Cliente WhatsApp'}</b><small>+{item.phone} - {contactSources[item.source]||'Chamado por disparo'} - {formatDate(item.created_at)}</small></div><span className={'status '+item.status}>{labels[item.status]||item.status}</span><button className="link" onClick={()=>remove(item.id)}>Apagar</button></article>)}</div>:<Empty text="Nenhum contato no historico."/>}</section>}
