@@ -9,7 +9,7 @@ const blocks = {
   start: { label:'Entrada', icon:'1', tone:'violet', description:'Inicio do fluxo', config:{ trigger:'manual' } },
   message: { label:'Mensagem', icon:'M', tone:'blue', description:'Envia texto no WhatsApp', config:{ message:'Ola, recebi seu pedido. Envie o comprovante do Pix para continuar.', delay:0 } },
   wait: { label:'Aguarda resposta', icon:'W', tone:'orange', description:'Espera uma resposta', config:{ duration:1, unit:'dias', field:'comprovante', preMessage:'' } },
-  ai: { label:'Bloco de IA', icon:'IA', tone:'green', description:'Analisa dados e comprovantes', config:{ model:'gpt-4.1-mini', prompt:'Analise a mensagem e confirme se o comprovante de Pix e valido.', saveTo:'pix.validado', autoSend:false, understandImage:true, understandPdf:true, identifyReceipt:true } },
+  ai: { label:'Bloco de IA', icon:'IA', tone:'green', description:'Analisa dados e comprovantes', config:{ model:'gpt-4.1-mini', prompt:'Responda ao cliente com clareza e cordialidade.', saveTo:'ai.response', autoSend:true, understandImage:true, understandPdf:true, identifyReceipt:true } },
   pix: { label:'Botao PIX', icon:'$', tone:'emerald', description:'Solicita pagamento via Pix', config:{ keyType:'CPF', key:'', recipient:'', amount:'' } },
   kie: { label:'Gerar musica', icon:'K', tone:'pink', description:'Envia pedido para Kie.ai', config:{ model:'Suno V5', style:'', instrumental:false, credential:'Chave do fluxo' } },
   condition: { label:'Condicional', icon:'?', tone:'cyan', description:'Direciona conforme uma regra', config:{ field:'pix.validado', operator:'igual a', value:'true', match:'all' } },

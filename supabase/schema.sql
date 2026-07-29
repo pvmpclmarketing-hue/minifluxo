@@ -13,6 +13,7 @@ create table if not exists public.connections (
 
 alter table public.connections add column if not exists site_integration_key uuid not null default gen_random_uuid();
 alter table public.connections add column if not exists uazapi_token_cipher text;
+alter table public.connections add column if not exists uazapi_token_hash text;
 create unique index if not exists connections_site_integration_key_idx on public.connections(site_integration_key);
 
 create table if not exists public.leads (
@@ -57,6 +58,7 @@ create table if not exists public.connection_flow_configs (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+alter table public.connection_flow_configs add column if not exists conversation_flow_id uuid references public.flows(id) on delete set null;
 
 -- Chave estavel por conta. O usuario pode trocar de WhatsApp sem alterar o site.
 create table if not exists public.site_integrations (
