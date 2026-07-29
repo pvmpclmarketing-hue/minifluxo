@@ -32,10 +32,15 @@ function previewAudios(body) {
     body.preview_audios, body.previewAudios, body.preview_audio_urls, body.previewAudioUrls,
     body.audio_urls, body.audioUrls, body.tracks,
     body.preview?.audios, body.preview?.audio_urls, body.preview?.audioUrls,
+    body.quiz?.preview_audio_urls, body.quiz?.previewAudios,
     body.music?.audios, body.music?.audio_urls, body.music?.audioUrls,
     body.kie?.audios, body.kie?.audio_urls, body.kie?.audioUrls,
   ];
   return [...urlsFrom(candidates)].slice(0, 2);
+}
+
+function fulfillmentMode(body) {
+  return body.fulfillment?.mode || body.quiz?.fulfillment_mode || null;
 }
 
 export async function POST(request) {
@@ -44,6 +49,10 @@ export async function POST(request) {
     const body = await request.json();
     if (body.event !== 'PAYMENT_APPROVED') return NextResponse.json({ received: true, ignored: true });
     if (!body.customer?.name || !body.customer?.phone) return NextResponse.json({ error: 'customer.name e customer.phone sao obrigatorios.' }, { status: 400 });
+    const mode = fulfillmentMode(body);
+    if (!['deliver_existing_preview_audio', 'generate_music_in_miniflux'].includes(mode)) return NextResponse.json({ error: 'fulfillment.mode deve ser deliver_existing_preview_audio ou generate_music_in_miniflux.' }, { status: 400 });
+    const orderId = body.order_id || body.orderId || null;
+    if (!orderId) return NextResponse.json({ error: 'order_id e obrigatorio para evitar disparos duplicados.' }, { status: 400 });
 
     const db = adminClient();
     const connection = await resolveConnection(db, body);
@@ -54,25 +63,28 @@ export async function POST(request) {
     if (flowError || !flow) return NextResponse.json({ error: 'Fluxo configurado nao encontrado.' }, { status: 404 });
 
     const phone = String(body.customer.phone).replace(/\D/g, '');
-    const audios = previewAudios(body);
+    const previewTracks = previewAudios(body);
+    if (mode === 'deliver_existing_preview_audio' && previewTracks.length !== 2) return NextResponse.json({ error: 'A entrega da previa exige exatamente duas URLs em preview.audios.' }, { status: 422 });
+    const audios = mode === 'deliver_existing_preview_audio' ? previewTracks : [];
     const musicRequest = body.music_request || body.custom_fields?.story || body.custom_fields?.music_style || body.story || body.lyric_text || null;
+    if (mode === 'generate_music_in_miniflux' && !body.lyric_text && !body.lyricText) return NextResponse.json({ error: 'lyric_text e obrigatorio para gerar a musica no WhatsEntregavel.' }, { status: 400 });
     const orderContext = {
       quiz: body.quiz || body.custom_fields?.quiz || {},
       story: body.story || '',
       lyricText: body.lyric_text || '',
       paid: true,
-      sourceOrderId: body.order_id || body.orderId || null,
+      sourceOrderId: orderId,
+      idempotency_key: body.idempotency_key || `payment:${orderId}`,
+      fulfillment_mode: mode,
       preview_audios: audios,
       preview_task_id: body.preview?.task_id || body.preview?.taskId || body.kie_task_id || null,
     };
     const leadValues = { name: body.customer.name, phone, music_request: musicRequest, status: audios.length ? 'in_progress' : 'generating', connection_id: connection.id, order_context: orderContext, updated_at: new Date().toISOString() };
     let lead;
     if (orderContext.sourceOrderId) {
-      const { data: existing } = await db.from('leads').select('id').eq('owner_id', flow.owner_id).eq('external_order_id', orderContext.sourceOrderId).maybeSingle();
+      const { data: existing } = await db.from('leads').select('id,status').eq('owner_id', flow.owner_id).eq('external_order_id', orderContext.sourceOrderId).maybeSingle();
       if (existing) {
-        const { data, error } = await db.from('leads').update(leadValues).eq('id', existing.id).select().single();
-        if (error) throw error;
-        lead = data;
+        return NextResponse.json({ received: true, duplicate: true, execution_id: existing.id, status: existing.status });
       }
     }
     if (!lead) {
