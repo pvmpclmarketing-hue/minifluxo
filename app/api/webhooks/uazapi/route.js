@@ -4,16 +4,20 @@ import { hashSecret } from '../../connection-secrets';
 import { executeFlow } from '../../flow-engine';
 
 const digits=value=>String(value||'').replace(/\D/g,'');
+const eventName=body=>String(body.EventType||body.event||body.type||body.data?.EventType||body.data?.event||'').toLowerCase();
 function messageText(body){const data=body.data||body;const message=data.message||data.data?.message||{};return data.text||data.body||message.conversation||message.extendedTextMessage?.text||message.imageMessage?.caption||message.videoMessage?.caption||'';}
 function phoneFrom(body){const data=body.data||body;const jid=data.key?.remoteJid||data.remoteJid||data.from||data.sender||'';return digits(String(jid).replace(/@.+$/,''));}
 function eventToken(body){return body.token||body.instanceToken||body.data?.token||body.data?.instanceToken||'';}
 function fromMe(body){const data=body.data||body;return !!(data.key?.fromMe||data.fromMe||data.wasSentByApi);}
+function isConnected(body){const data=body.data||body;const value=data.status?.connected??data.connected??data.loggedIn??data.status??data.connection;return value===true||String(value||'').toLowerCase()==='connected'||String(value||'').toLowerCase()==='open';}
 
 export async function POST(request){
   try{
-    const body=await request.json();if(body.EventType!=='messages'&&body.event!=='messages')return NextResponse.json({received:true,ignored:true});if(fromMe(body))return NextResponse.json({received:true,ignored:true});
-    const token=eventToken(body);const phone=phoneFrom(body);const text=messageText(body);if(!token||!phone)return NextResponse.json({received:true,ignored:true});
+    const body=await request.json();const event=eventName(body);const token=eventToken(body);if(!token)return NextResponse.json({received:true,ignored:true});
     const db=adminClient();const {data:connection}=await db.from('connections').select('*').eq('uazapi_token_hash',hashSecret(token)).maybeSingle();if(!connection)return NextResponse.json({received:true,ignored:true});
+    if(event==='connection'){const status=isConnected(body)?'connected':'disconnected';await db.from('connections').update({status}).eq('id',connection.id);return NextResponse.json({received:true,connection:status});}
+    if(event!=='messages'||fromMe(body))return NextResponse.json({received:true,ignored:true});
+    const phone=phoneFrom(body);const text=messageText(body);if(!phone)return NextResponse.json({received:true,ignored:true});
     const {data:config}=await db.from('connection_flow_configs').select('conversation_flow_id,owner_id').eq('connection_id',connection.id).maybeSingle();if(!config?.conversation_flow_id)return NextResponse.json({received:true,ignored:true});
     const {data:existing}=await db.from('leads').select('*').eq('connection_id',connection.id).eq('phone',phone).eq('status','waiting_response').order('updated_at',{ascending:false}).limit(1).maybeSingle();
     if(existing?.order_context?.flow_execution?.wait_node_id){const context={...(existing.order_context||{}),last_message:text};const {data:lead}=await db.from('leads').update({order_context:context,status:'in_progress',updated_at:new Date().toISOString()}).eq('id',existing.id).select().single();const {data:flow}=await db.from('flows').select('*').eq('id',existing.order_context.flow_execution.flow_id).eq('owner_id',existing.owner_id).maybeSingle();if(flow?.status==='active')await executeFlow({db,flow,lead,connection,resumeAfterId:existing.order_context.flow_execution.wait_node_id});return NextResponse.json({received:true,resumed:true});}
