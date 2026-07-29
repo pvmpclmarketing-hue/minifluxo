@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { createBrowserClient } from '@supabase/ssr';
 import FlowCanvas from './flow-canvas';
 import ConnectionsPanel, { ConnectionCreationModal } from './connections-panel';
 
@@ -16,6 +17,7 @@ export default function Dashboard({userEmail,initialLeads,initialConnections,ini
   const [configs,setConfigs]=useState(initialDispatchConfigs);
   const [selected,setSelected]=useState(initialFlows[0]||null);
   const [modal,setModal]=useState('');
+  const [userMenu,setUserMenu]=useState(false);
   const [error,setError]=useState('');
   const [origin,setOrigin]=useState('https://minifluxo.vercel.app');
   useEffect(()=>setOrigin(window.location.origin),[]);
@@ -36,6 +38,9 @@ export default function Dashboard({userEmail,initialLeads,initialConnections,ini
   const createConnection=event=>submit('/api/connections',event,item=>{setConnections([...connections,item]);setModal('');});
   const saveConfig=event=>submit('/api/dispatch-config',event,item=>{setConfigs([...configs.filter(config=>config.connection_id!==item.connection_id),item]);setError('Configuracao salva.');});
   async function deleteContact(id){if(!window.confirm('Apagar este contato? Se ele chamar novamente, o fluxo sera iniciado do zero.'))return;setError('');const response=await fetch(`/api/leads/${id}`,{method:'DELETE'});if(!response.ok){const data=await response.json();return setError(data.error||'Nao foi possivel apagar o contato.');}setLeads(current=>current.filter(item=>item.id!==id));}
+  const accountClient=()=>createBrowserClient(process.env.NEXT_PUBLIC_SUPABASE_URL,process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,{auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:true}});
+  async function changePassword(event){event.preventDefault();const data=new FormData(event.currentTarget);const password=String(data.get('password')||'');const confirm=String(data.get('confirm_password')||'');if(password.length<6)return setError('A nova senha precisa ter ao menos 6 caracteres.');if(password!==confirm)return setError('As senhas nao coincidem.');setError('');const {error:authError}=await accountClient().auth.updateUser({password});if(authError)return setError(authError.message);setModal('');setUserMenu(false);setError('Senha alterada com sucesso.');}
+  async function signOut(){await accountClient().auth.signOut();window.location.assign('/login');}
 
   return <div className="shell">
     <aside className="side">
@@ -44,7 +49,7 @@ export default function Dashboard({userEmail,initialLeads,initialConnections,ini
       <div className="side-foot"><div className={'dot '+(connected?'online':'')}/><small>{connected?`Conectado: ${connected.name}`:'WhatsApp desconectado'}</small></div>
     </aside>
     <main className="content">
-      <header><div><p className="eyebrow">PAINEL OPERACIONAL</p><h1>{title}</h1></div><div className="head-actions"><span className="account">{userEmail}</span>{tab==='flows'&&<button className="primary" onClick={()=>setModal('flow')}>+ Novo fluxo</button>}{tab==='leads'&&<button className="primary" onClick={()=>setModal('lead')}>+ Novo contato</button>}{tab==='connections'&&<button className="primary" onClick={()=>setModal('connection')}>+ Nova conexao</button>}</div></header>
+      <header><div><p className="eyebrow">PAINEL OPERACIONAL</p><h1>{title}</h1></div><div className="head-actions"><div className="user-menu-wrap"><button className="user-trigger" onClick={()=>setUserMenu(value=>!value)} aria-expanded={userMenu}><span className="user-avatar">{(userEmail||'U')[0].toUpperCase()}</span><span className="account">{userEmail}</span><i>⌄</i></button>{userMenu&&<div className="user-menu"><div><span className="user-avatar">{(userEmail||'U')[0].toUpperCase()}</span><p><b>Minha conta</b><small>{userEmail}</small></p></div><button onClick={()=>{setModal('password');setUserMenu(false);setError('');}}>Alterar senha</button><button className="signout" onClick={signOut}>Sair do painel</button></div>}</div>{tab==='flows'&&<button className="primary" onClick={()=>setModal('flow')}>+ Novo fluxo</button>}{tab==='leads'&&<button className="primary" onClick={()=>setModal('lead')}>+ Novo contato</button>}{tab==='connections'&&<button className="primary" onClick={()=>setModal('connection')}>+ Nova conexao</button>}</div></header>
       {tab==='dashboard'&&<DashboardHome metrics={metrics} flows={flows} open={()=>setTab('flows')}/>}
       {tab==='flows'&&<Flows flows={flows} open={item=>{setSelected(item);setTab('flow');}} create={()=>setModal('flow')}/>}
       {tab==='flow'&&(selected?<FlowCanvas flow={selected}/>:<Empty text="Crie seu primeiro fluxo."/>)}
@@ -57,6 +62,7 @@ export default function Dashboard({userEmail,initialLeads,initialConnections,ini
     {modal==='flow'&&<Modal title="Novo fluxo" close={()=>setModal('')} error={error}><form onSubmit={createFlow}><label>Nome do fluxo<input name="name" required/></label><label>Descricao<input name="description"/></label><button className="primary">Criar fluxo</button></form></Modal>}
     {modal==='lead'&&<Modal title="Iniciar contato" close={()=>setModal('')} error={error}><form onSubmit={createLead}><label>Nome<input name="name" required/></label><label>WhatsApp com DDI<input name="phone" required/></label><button className="primary">Enviar mensagem</button></form></Modal>}
     {modal==='connection'&&<ConnectionCreationModal close={()=>setModal('')} create={createConnection} error={error}/>} {error&&!modal&&<div className="toast">{error}</div>}
+    {modal==='password'&&<Modal title="Alterar senha" close={()=>setModal('')} error={error}><form onSubmit={changePassword}><label>Nova senha<input name="password" type="password" minLength="6" autoComplete="new-password" required/></label><label>Confirmar nova senha<input name="confirm_password" type="password" minLength="6" autoComplete="new-password" required/></label><button className="primary">Salvar nova senha</button></form></Modal>}
   </div>;
 }
 
