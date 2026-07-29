@@ -8,7 +8,7 @@ export default async function DashboardPage() {
   const supabase = createServerClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY, { cookies: { getAll: () => jar.getAll() } });
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect('/login');
-  const { data: leads = [] } = await supabase.from('leads').select('*').order('created_at', { ascending: false }).limit(30);
+  const { data: leads = [] } = await supabase.from('leads').select('*').order('created_at', { ascending: false }).limit(100);
   const { data: connections = [] } = await supabase.from('connections').select('*').order('created_at', { ascending: false });
   const { data: flows = [] } = await supabase.from('flows').select('*').order('created_at', { ascending: false });
   const { data: dispatchConfigs = [] } = await supabase.from('connection_flow_configs').select('*');
