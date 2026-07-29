@@ -5,11 +5,11 @@ import { executeFlow } from '../../flow-engine';
 
 const digits=value=>String(value||'').replace(/\D/g,'');
 const eventName=body=>String(body.EventType||body.event||body.type||body.data?.EventType||body.data?.event||'').toLowerCase();
-function messageText(body){const data=body.data||body;const message=data.message||data.data?.message||{};return data.text||data.body||message.conversation||message.extendedTextMessage?.text||message.imageMessage?.caption||message.videoMessage?.caption||'';}
-function phoneFrom(body){const data=body.data||body;const jid=data.key?.remoteJid||data.remoteJid||data.from||data.sender||'';return digits(String(jid).replace(/@.+$/,''));}
+function messageText(body){const data=body.data||body;const message=data.message||data.data?.message||{};const content=message.message||message;return data.text||data.body||message.text||content.conversation||content.extendedTextMessage?.text||content.imageMessage?.caption||content.videoMessage?.caption||'';}
+function phoneFrom(body){const data=body.data||body;const message=data.message||data.data?.message||{};const chat=data.chat||data.data?.chat||{};const jid=data.key?.remoteJid||message.key?.remoteJid||data.remoteJid||chat.remoteJid||chat.id||chat.jid||data.from||data.sender||'';return digits(String(jid).replace(/@.+$/,''));}
 function eventToken(body){return body.token||body.instanceToken||body.data?.token||body.data?.instanceToken||'';}
 function eventInstanceName(body){const data=body.data||body;return body.instanceName||body.instance?.name||data.instanceName||data.instance?.name||data.instance||body.instance||'';}
-function fromMe(body){const data=body.data||body;return !!(data.key?.fromMe||data.fromMe||data.wasSentByApi);}
+function fromMe(body){const data=body.data||body;const message=data.message||data.data?.message||{};return !!(data.key?.fromMe||message.key?.fromMe||data.fromMe||message.fromMe||data.wasSentByApi);}
 function isConnected(body){const data=body.data||body;const value=data.status?.connected??data.connected??data.loggedIn??data.status??data.connection;return value===true||String(value||'').toLowerCase()==='connected'||String(value||'').toLowerCase()==='open';}
 
 export async function POST(request){
