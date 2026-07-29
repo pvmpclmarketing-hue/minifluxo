@@ -14,14 +14,14 @@ function isConnected(body){const data=body.data||body;const value=data.status?.c
 
 export async function POST(request){
   try{
-    const body=await request.json();const event=eventName(body);const token=eventToken(body);const instanceName=String(eventInstanceName(body)||'');const db=adminClient();let connection=null;
+    const body=await request.json();const event=eventName(body);const token=eventToken(body);const instanceName=String(eventInstanceName(body)||'');const phone=phoneFrom(body);const ownMessage=fromMe(body);const db=adminClient();let connection=null;
     if(token){const result=await db.from('connections').select('*').eq('uazapi_token_hash',hashSecret(token)).maybeSingle();connection=result.data;}
     if(!connection&&instanceName){const result=await db.from('connections').select('*').eq('instance_name',instanceName).maybeSingle();connection=result.data;}
-    console.info('[uazapi webhook]',{event,hasToken:Boolean(token),instanceName:instanceName||null,connectionMatched:Boolean(connection)});
+    console.info('[uazapi webhook]',{event,hasToken:Boolean(token),instanceName:instanceName||null,connectionMatched:Boolean(connection),hasPhone:Boolean(phone),ownMessage,rootKeys:Object.keys(body).slice(0,12),dataKeys:Object.keys(body.data||{}).slice(0,12)});
     if(!connection)return NextResponse.json({received:true,ignored:true});
     if(event==='connection'){const status=isConnected(body)?'connected':'disconnected';await db.from('connections').update({status}).eq('id',connection.id);return NextResponse.json({received:true,connection:status});}
-    if(event!=='messages'||fromMe(body))return NextResponse.json({received:true,ignored:true});
-    const phone=phoneFrom(body);const text=messageText(body);if(!phone)return NextResponse.json({received:true,ignored:true});
+    if(event!=='messages'||ownMessage)return NextResponse.json({received:true,ignored:true});
+    const text=messageText(body);if(!phone)return NextResponse.json({received:true,ignored:true});
     const {data:config}=await db.from('connection_flow_configs').select('conversation_flow_id,owner_id').eq('connection_id',connection.id).maybeSingle();if(!config?.conversation_flow_id)return NextResponse.json({received:true,ignored:true});
     const {data:existing}=await db.from('leads').select('*').eq('connection_id',connection.id).eq('phone',phone).eq('status','waiting_response').order('updated_at',{ascending:false}).limit(1).maybeSingle();
     if(existing?.order_context?.flow_execution?.wait_node_id){const context={...(existing.order_context||{}),last_message:text};const {data:lead}=await db.from('leads').update({order_context:context,status:'in_progress',updated_at:new Date().toISOString()}).eq('id',existing.id).select().single();const {data:flow}=await db.from('flows').select('*').eq('id',existing.order_context.flow_execution.flow_id).eq('owner_id',existing.owner_id).maybeSingle();if(flow?.status==='active')await executeFlow({db,flow,lead,connection,resumeAfterId:existing.order_context.flow_execution.wait_node_id});return NextResponse.json({received:true,resumed:true});}
