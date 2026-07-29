@@ -6,7 +6,7 @@ import { executeFlow } from '../../flow-engine';
 const digits=value=>String(value||'').replace(/\D/g,'');
 const eventName=body=>String(body.EventType||body.event||body.type||body.data?.EventType||body.data?.event||'').toLowerCase();
 function messageText(body){const data=body.data||body;const message=data.message||data.data?.message||{};const content=message.message||message;return data.text||data.body||message.text||content.conversation||content.extendedTextMessage?.text||content.imageMessage?.caption||content.videoMessage?.caption||'';}
-function phoneFrom(body){const data=body.data||body;const message=data.message||data.data?.message||{};const chat=data.chat||data.data?.chat||{};const jid=data.key?.remoteJid||message.key?.remoteJid||data.remoteJid||chat.remoteJid||chat.id||chat.jid||data.from||data.sender||'';return digits(String(jid).replace(/@.+$/,''));}
+function phoneFrom(body){const data=body.data||body;const message=data.message||data.data?.message||{};const chat=data.chat||data.data?.chat||{};const jid=data.phone||message.key?.remoteJidAlt||data.key?.remoteJidAlt||chat.phone||chat.remoteJidAlt||data.key?.remoteJid||message.key?.remoteJid||data.remoteJid||chat.remoteJid||chat.id||chat.jid||data.from||data.sender||'';return digits(String(jid).replace(/@.+$/,''));}
 function eventToken(body){return body.token||body.instanceToken||body.data?.token||body.data?.instanceToken||'';}
 function eventInstanceName(body){const data=body.data||body;return body.instanceName||body.instance?.name||data.instanceName||data.instance?.name||data.instance||body.instance||'';}
 function fromMe(body){const data=body.data||body;const message=data.message||data.data?.message||{};return !!(data.key?.fromMe||message.key?.fromMe||data.fromMe||message.fromMe||data.wasSentByApi);}
@@ -17,7 +17,7 @@ export async function POST(request){
     const body=await request.json();const event=eventName(body);const token=eventToken(body);const instanceName=String(eventInstanceName(body)||'');const phone=phoneFrom(body);const ownMessage=fromMe(body);const db=adminClient();let connection=null;
     if(token){const result=await db.from('connections').select('*').eq('uazapi_token_hash',hashSecret(token)).maybeSingle();connection=result.data;}
     if(!connection&&instanceName){const result=await db.from('connections').select('*').eq('instance_name',instanceName).maybeSingle();connection=result.data;}
-    console.info('[uazapi webhook]',{event,hasToken:Boolean(token),instanceName:instanceName||null,connectionMatched:Boolean(connection),hasPhone:Boolean(phone),ownMessage,rootKeys:Object.keys(body).slice(0,12),dataKeys:Object.keys(body.data||{}).slice(0,12)});
+    console.info('[uazapi webhook]',{event,hasToken:Boolean(token),instanceName:instanceName||null,connectionMatched:Boolean(connection),hasPhone:Boolean(phone),ownMessage,rootKeys:Object.keys(body).slice(0,12),dataKeys:Object.keys(body.data||{}).slice(0,12),chatKeys:Object.keys(body.chat||{}).slice(0,16),messageKeyKeys:Object.keys(body.message?.key||{}).slice(0,16)});
     if(!connection)return NextResponse.json({received:true,ignored:true});
     if(event==='connection'){const status=isConnected(body)?'connected':'disconnected';await db.from('connections').update({status}).eq('id',connection.id);return NextResponse.json({received:true,connection:status});}
     if(event!=='messages'||ownMessage)return NextResponse.json({received:true,ignored:true});
