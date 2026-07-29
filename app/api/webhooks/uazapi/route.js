@@ -8,13 +8,17 @@ const eventName=body=>String(body.EventType||body.event||body.type||body.data?.E
 function messageText(body){const data=body.data||body;const message=data.message||data.data?.message||{};return data.text||data.body||message.conversation||message.extendedTextMessage?.text||message.imageMessage?.caption||message.videoMessage?.caption||'';}
 function phoneFrom(body){const data=body.data||body;const jid=data.key?.remoteJid||data.remoteJid||data.from||data.sender||'';return digits(String(jid).replace(/@.+$/,''));}
 function eventToken(body){return body.token||body.instanceToken||body.data?.token||body.data?.instanceToken||'';}
+function eventInstanceName(body){const data=body.data||body;return body.instanceName||body.instance?.name||data.instanceName||data.instance?.name||data.instance||body.instance||'';}
 function fromMe(body){const data=body.data||body;return !!(data.key?.fromMe||data.fromMe||data.wasSentByApi);}
 function isConnected(body){const data=body.data||body;const value=data.status?.connected??data.connected??data.loggedIn??data.status??data.connection;return value===true||String(value||'').toLowerCase()==='connected'||String(value||'').toLowerCase()==='open';}
 
 export async function POST(request){
   try{
-    const body=await request.json();const event=eventName(body);const token=eventToken(body);if(!token)return NextResponse.json({received:true,ignored:true});
-    const db=adminClient();const {data:connection}=await db.from('connections').select('*').eq('uazapi_token_hash',hashSecret(token)).maybeSingle();if(!connection)return NextResponse.json({received:true,ignored:true});
+    const body=await request.json();const event=eventName(body);const token=eventToken(body);const instanceName=String(eventInstanceName(body)||'');const db=adminClient();let connection=null;
+    if(token){const result=await db.from('connections').select('*').eq('uazapi_token_hash',hashSecret(token)).maybeSingle();connection=result.data;}
+    if(!connection&&instanceName){const result=await db.from('connections').select('*').eq('instance_name',instanceName).maybeSingle();connection=result.data;}
+    console.info('[uazapi webhook]',{event,hasToken:Boolean(token),instanceName:instanceName||null,connectionMatched:Boolean(connection)});
+    if(!connection)return NextResponse.json({received:true,ignored:true});
     if(event==='connection'){const status=isConnected(body)?'connected':'disconnected';await db.from('connections').update({status}).eq('id',connection.id);return NextResponse.json({received:true,connection:status});}
     if(event!=='messages'||fromMe(body))return NextResponse.json({received:true,ignored:true});
     const phone=phoneFrom(body);const text=messageText(body);if(!phone)return NextResponse.json({received:true,ignored:true});
