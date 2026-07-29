@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { adminClient } from '../../supabase';
 import { sendText } from '../../provider';
+import { executeFlow } from '../../flow-engine';
 
 async function resolveConnection(db,body) {
   if(body.integration_key){const {data:integration}=await db.from('site_integrations').select('connection_id').eq('integration_key',body.integration_key).maybeSingle();if(integration?.connection_id)return (await db.from('connections').select('*').eq('id',integration.connection_id).maybeSingle()).data;return (await db.from('connections').select('*').eq('site_integration_key',body.integration_key).maybeSingle()).data;}
@@ -21,7 +22,11 @@ export async function POST(request) {
     const orderContext={quiz:body.quiz||body.custom_fields?.quiz||{},story:body.story||'',lyricText:body.lyric_text||'',paid:true,sourceOrderId:body.order_id||body.orderId||null}; let lead;
     if(orderContext.sourceOrderId){const {data:existing}=await db.from('leads').select('id').eq('owner_id',flow.owner_id).eq('external_order_id',orderContext.sourceOrderId).maybeSingle();if(existing){const {data,error}=await db.from('leads').update({name:body.customer.name,phone,music_request:musicRequest,status:'generating',connection_id:connection.id,order_context:orderContext,updated_at:new Date().toISOString()}).eq('id',existing.id).select().single();if(error)throw error;lead=data;}}
     if(!lead){const {data,error}=await db.from('leads').insert({owner_id:flow.owner_id,name:body.customer.name,phone,source:'payment',music_request:musicRequest,status:'generating',provider:'payment',connection_id:connection.id,external_order_id:orderContext.sourceOrderId,order_context:orderContext}).select().single();if(error)throw error;lead=data;}
-    if(connection.status==='connected')await sendText(connection,phone,`Pagamento confirmado, ${body.customer.name}! Sua musica entrou na fila de criacao.`);
+    if(connection.status==='connected'){
+      const {data:executionFlow}=await db.from('flows').select('*').eq('id',config.payment_flow_id).eq('owner_id',config.owner_id).maybeSingle();
+      if(executionFlow?.status==='active')await executeFlow({db,flow:executionFlow,lead,connection});
+      else await sendText(connection,phone,`Pagamento confirmado, ${body.customer.name}! Sua música entrou na fila de criação.`);
+    }
     return NextResponse.json({received:true,execution_id:lead.id});
   } catch(error) { return NextResponse.json({error:error.message},{status:500}); }
 }

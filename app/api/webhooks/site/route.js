@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { adminClient } from '../../supabase';
 import { sendText } from '../../provider';
+import { executeFlow } from '../../flow-engine';
 
 async function resolveConnection(db, body) {
   if (body.integration_key) {
@@ -24,6 +25,10 @@ export async function POST(request) {
   const musicRequest=body.music_request||body.musicRequest||context.lyricText||context.story||null;
   const {data,error}=await db.from('leads').insert({owner_id:config.owner_id,name:body.name,phone,source:'site',music_request:musicRequest,status:'waiting_pix',provider:connection.provider,connection_id:connection.id,external_order_id:context.sourceOrderId,order_context:context}).select().single();
   if(error)return NextResponse.json({error:error.message},{status:400});
-  if(connection.status==='connected')await sendText(connection,phone,`Ola, ${body.name}! Recebi os dados da sua musica. Envie aqui o comprovante do Pix para continuarmos.`);
+  if(connection.status==='connected'){
+    const {data:flow}=await db.from('flows').select('*').eq('id',config.site_flow_id).eq('owner_id',config.owner_id).maybeSingle();
+    if(flow?.status==='active')await executeFlow({db,flow,lead:data,connection});
+    else await sendText(connection,phone,`Ola, ${body.name}! Recebi os dados da sua música. Envie aqui o comprovante do Pix para continuarmos.`);
+  }
   return NextResponse.json({received:true,execution_id:data.id,flow_id:config.site_flow_id},{status:201});
 }
