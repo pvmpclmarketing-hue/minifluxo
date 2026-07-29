@@ -9,6 +9,6 @@ export async function POST(_request, { params }) {
     const response=await fetch(`${process.env.UAZAPI_URL}/instance/connect`,{method:'POST',headers:{token:process.env.UAZAPI_TOKEN,'Content-Type':'application/json'},body:JSON.stringify({browser:'auto'})});
     if(!response.ok) throw new Error(`UazAPI: ${response.status} ${await response.text()}`);
     const payload=await response.json(); await db.from('connections').update({status:payload.connected?'connected':'connecting'}).eq('id',id);
-    return NextResponse.json({qr:payload.qrcode||payload.base64||payload.instance?.qrcode||null});
+    return NextResponse.json({qr:payload.qrcode||payload.base64||payload.instance?.qrcode||payload.instance?.base64||null});
   } catch(error) { return NextResponse.json({error:error.message},{status:500}); }
 }
