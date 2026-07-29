@@ -39,7 +39,7 @@ function FlowNode({ data }) {
       </div>
     </div>
     <b>{data.title}</b><small>{summary(data)}</small>
-    {data.kind==='condition'?<><label className={`${styles.branch} ${styles.branchYes}`}>SIM</label><Handle id="true" type="source" position={Position.Right} style={{top:'42%'}}/><label className={`${styles.branch} ${styles.branchNo}`}>NAO</label><Handle id="false" type="source" position={Position.Right} style={{top:'72%'}}/></>:<Handle type="source" position={Position.Right}/>} 
+    {data.kind==='condition'?<><label className={`${styles.branch} ${styles.branchYes}`}>SIM</label><Handle id="true" type="source" position={Position.Right} style={{top:'42%'}}/><label className={`${styles.branch} ${styles.branchNo}`}>NAO</label><Handle id="false" type="source" position={Position.Right} style={{top:'72%'}}/></>:<Handle type="source" position={Position.Right}/>}
   </div>;
 }
 function summary(data) {
