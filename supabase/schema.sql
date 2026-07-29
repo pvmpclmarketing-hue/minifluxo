@@ -12,6 +12,7 @@ create table if not exists public.connections (
 );
 
 alter table public.connections add column if not exists site_integration_key uuid not null default gen_random_uuid();
+alter table public.connections add column if not exists uazapi_token_cipher text;
 create unique index if not exists connections_site_integration_key_idx on public.connections(site_integration_key);
 
 create table if not exists public.leads (
