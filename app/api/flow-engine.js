@@ -19,10 +19,14 @@ async function saveDeliveryProgress(db,lead,connection,audios,progress,status='d
   const orderContext={...(lead.order_context||{}),delivery:{...(lead.order_context?.delivery||{}),audios,sent_indexes:progress.sent_indexes||[],intro_sent:!!progress.intro_sent}};
   const {data,error}=await db.from('leads').update({status,order_context:orderContext,updated_at:new Date().toISOString()}).eq('id',lead.id).eq('owner_id',lead.owner_id).eq('connection_id',connection.id).select().single();if(error)throw error;return data;
 }
+const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+async function sendAudioConfirmed(connection,phone,audio,index,total){
+  let lastError;for(let attempt=1;attempt<=3;attempt+=1){try{console.info('[music delivery] sending track',{track:index+1,attempt});const result=await sendAudio(connection,phone,audio,`Música ${index+1} de ${total}`);console.info('[music delivery] track accepted',{track:index+1,attempt});return result;}catch(error){lastError=error;console.error('[music delivery] track failed',{track:index+1,attempt,error:error?.message||String(error)});if(attempt<3)await wait(attempt*1500);}}throw lastError;
+}
 async function deliverAudioTracks(db,lead,connection,audios,intro){
   const saved=lead.order_context?.delivery||{};let currentLead=lead;let sentIndexes=Array.isArray(saved.sent_indexes)?saved.sent_indexes:[];let introSent=!!saved.intro_sent;
   if(intro&&!introSent){await sendText(connection,currentLead.phone,intro);introSent=true;currentLead=await saveDeliveryProgress(db,currentLead,connection,audios,{sent_indexes:sentIndexes,intro_sent:introSent});}
-  const pendingIndexes=Array.from({length:Math.min(2,audios.length)},(_,index)=>index).filter(index=>!sentIndexes.includes(index));const results=await Promise.allSettled(pendingIndexes.map(index=>sendAudio(connection,currentLead.phone,audios[index],`Música ${index+1} de ${Math.min(2,audios.length)}`)));const succeeded=pendingIndexes.filter((_,index)=>results[index].status==='fulfilled');if(succeeded.length){sentIndexes=[...sentIndexes,...succeeded];currentLead=await saveDeliveryProgress(db,currentLead,connection,audios,{sent_indexes:sentIndexes,intro_sent:introSent});}const failed=results.find(result=>result.status==='rejected');if(failed)throw failed.reason;
+  const total=Math.min(2,audios.length);for(let index=0;index<total;index+=1){if(sentIndexes.includes(index))continue;await sendAudioConfirmed(connection,currentLead.phone,audios[index],index,total);sentIndexes=[...sentIndexes,index];currentLead=await saveDeliveryProgress(db,currentLead,connection,audios,{sent_indexes:sentIndexes,intro_sent:introSent});if(index<total-1)await wait(Number(process.env.AUDIO_SEND_INTERVAL_MS||2000));}
   return currentLead;
 }
 
