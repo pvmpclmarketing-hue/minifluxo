@@ -5,7 +5,7 @@ import { createBrowserClient } from '@supabase/ssr';
 import FlowCanvas from './flow-canvas';
 import ConnectionsPanel, { ConnectionCreationModal } from './connections-panel';
 
-const labels={waiting_pix:'Aguardando Pix',waiting_briefing:'Aguardando briefing',waiting_response:'Aguardando resposta',generating:'Gerando musica',completed:'Entregue',in_progress:'Em andamento'};
+const labels={waiting_pix:'Aguardando Pix',waiting_briefing:'Aguardando briefing',waiting_response:'Aguardando resposta',generating:'Gerando musica',delivering:'Entregando música',delivery_failed:'Falha na entrega',timed_out:'Encerrado por tempo limite',completed:'Entregue',in_progress:'Em andamento'};
 const contactSources={inbound:'Chamou primeiro',manual:'Chamado por disparo',site:'Chamado pelo site',payment:'Chamado apos pagamento'};
 const contactSource=item=>contactSources[item.order_context?.contact_origin||item.source]||'Chamado por disparo';
 

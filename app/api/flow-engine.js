@@ -40,6 +40,7 @@ async function startKie(db,flow,lead,node,variables){
 
 export async function executeFlow({db,flow,lead,connection,resumeAfterId=null,audios=[]}){
   assertExecutionScope(flow,lead,connection);
+  if(lead.status==='timed_out')return {completed:false,reason:'execution_timed_out'};
   const nodes=Array.isArray(flow.nodes)?flow.nodes:[];const edges=Array.isArray(flow.edges)?flow.edges:[];if(!nodes.length)return {completed:false,reason:'empty_flow'};
   const readyAudios=Array.isArray(audios)&&audios.length?audios:(Array.isArray(lead.order_context?.preview_audios)?lead.order_context.preview_audios:[]);
   let node=resumeAfterId?nextNode(nodes,edges,resumeAfterId):(nodes.find(item=>item.data?.kind==='start')||nodes[0]);if(node?.data?.kind==='start')node=nextNode(nodes,edges,node.id);let currentLead=lead;let variables=variablesFor(currentLead,{audios:readyAudios});
