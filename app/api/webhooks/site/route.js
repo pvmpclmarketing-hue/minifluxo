@@ -20,6 +20,7 @@ export async function POST(request) {
   const db=adminClient(); const connection=await resolveConnection(db,body);
   if(!connection)return NextResponse.json({error:'Informe uma integration_key valida.'},{status:400});
   const {data:config}=await db.from('connection_flow_configs').select('site_flow_id,owner_id').eq('connection_id',connection.id).maybeSingle();
+  if(config?.owner_id!==connection.owner_id)return NextResponse.json({error:'A configuração não pertence à conta desta conexão.'},{status:403});
   if(!config?.site_flow_id)return NextResponse.json({error:'Nenhum fluxo de site configurado para esta conexao.'},{status:404});
   const context={quiz:body.quiz||{},story:body.story||'',lyricText:body.lyric_text||body.lyricText||'',paid:!!body.paid,sourceOrderId:body.order_id||body.orderId||null};
   const musicRequest=body.music_request||body.musicRequest||context.lyricText||context.story||null;

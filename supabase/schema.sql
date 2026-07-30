@@ -37,6 +37,9 @@ create table if not exists public.leads (
 alter table public.leads add column if not exists connection_id uuid references public.connections(id) on delete set null;
 alter table public.leads add column if not exists external_order_id text;
 alter table public.leads add column if not exists order_context jsonb not null default '{}'::jsonb;
+-- Uma geração Kie e um pedido externo só podem pertencer a uma execução da conta.
+create unique index if not exists leads_kie_task_id_unique_idx on public.leads(kie_task_id) where kie_task_id is not null;
+create unique index if not exists leads_owner_external_order_unique_idx on public.leads(owner_id, external_order_id) where external_order_id is not null;
 
 create table if not exists public.flows (
   id uuid primary key default gen_random_uuid(),

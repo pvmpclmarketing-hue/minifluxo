@@ -16,7 +16,7 @@ export async function POST(request) {
     if (!lead) continue;
     try {
       const { data: flow } = await db.from('flows').select('*').eq('id', execution.flow_id).eq('owner_id', lead.owner_id).maybeSingle();
-      const { data: connection } = await db.from('connections').select('*').eq('id', lead.connection_id).maybeSingle();
+      const { data: connection } = await db.from('connections').select('*').eq('id', lead.connection_id).eq('owner_id', lead.owner_id).maybeSingle();
       if (!flow?.status || !connection || connection.status !== 'connected') throw new Error('Fluxo ou WhatsApp indisponivel para continuar o delay.');
       await executeFlow({ db, flow, lead, connection, resumeAfterId: execution.delay_node_id });
       resumed += 1;

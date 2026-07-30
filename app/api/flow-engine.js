@@ -1,4 +1,4 @@
-import { decryptSecret } from './connection-secrets';
+import { decryptSecret, hashSecret } from './connection-secrets';
 import { sendAudio, sendText } from './provider';
 
 const valueAt=(data,path)=>path.split('.').reduce((value,key)=>value?.[key],data);
@@ -7,6 +7,9 @@ const render=(text,variables)=>String(text||'').replace(/\{([^}]+)\}/g,(_,path)=
 const nextNode=(nodes,edges,nodeId,sourceHandle=null)=>{const matches=edges.filter(edge=>edge.source===nodeId);const selected=sourceHandle?matches.find(edge=>edge.sourceHandle===sourceHandle):matches.find(edge=>!edge.sourceHandle)||matches[0];return nodes.find(node=>node.id===selected?.target)||null;};
 const modelName=value=>({ 'Suno V5':'V5','Suno V4.5':'V4_5' }[value]||value||'V5');
 const delayMilliseconds=config=>{const amount=Math.max(1,Number(config.duration)||1);const multiplier={minutos:60000,horas:3600000,dias:86400000}[config.unit]||60000;return amount*multiplier;};
+function assertExecutionScope(flow,lead,connection){
+  if(!flow?.owner_id||!lead?.owner_id||!connection?.owner_id||!lead?.connection_id||flow.owner_id!==lead.owner_id||connection.owner_id!==lead.owner_id||connection.id!==lead.connection_id)throw new Error('Execução bloqueada: fluxo, conversa e WhatsApp não pertencem à mesma conta.');
+}
 
 function variablesFor(lead,extra={}){
   const context=lead.order_context||{};return {name:lead.name,phone:lead.phone,story:context.story||'',lyric_text:context.lyricText||lead.music_request||'',music_request:lead.music_request||'',last_message:context.last_message||'',quiz:context.quiz||{},flow_data:context.flow_data||{},paid:!!context.paid,lead:{id:lead.id,...lead},kie:{audios:extra.audios||[]},...extra};
@@ -24,7 +27,7 @@ async function startKie(db,flow,lead,node,variables){
   const deploymentHost=process.env.VERCEL_PROJECT_PRODUCTION_URL||process.env.VERCEL_URL||'';
   const callbackBase=String(process.env.WHATSENTREGAVEL_URL||deploymentHost).replace(/^https?:\/\//,'').replace(/\/$/,'');
   if(!callbackBase)throw new Error('Não foi possível identificar a URL pública para o callback da Kie.');
-  const callbackSecret=process.env.KIE_WEBHOOK_SECRET||process.env.FLOW_SECRETS_KEY;if(!callbackSecret)throw new Error('Configure FLOW_SECRETS_KEY na Vercel.');
+  const callbackSecret=process.env.KIE_WEBHOOK_SECRET||(process.env.FLOW_SECRETS_KEY?hashSecret(`${process.env.FLOW_SECRETS_KEY}:kie-callback`):'');if(!callbackSecret)throw new Error('Configure KIE_WEBHOOK_SECRET ou FLOW_SECRETS_KEY na Vercel.');
   const quiz=variables.quiz||{};const prompt=variables.lyric_text||variables.music_request||variables.story;if(!prompt)throw new Error('O pedido não possui letra ou briefing para gerar a música.');
   const style=config.style||quiz.music_style||quiz.genre||quiz.genre_musical||'música personalizada emocionante';
   const title=`Música para ${lead.name}`.slice(0,80);const voice=quiz.voice_gender||quiz.vocal_gender||quiz.genero_voz;
@@ -36,6 +39,7 @@ async function startKie(db,flow,lead,node,variables){
 }
 
 export async function executeFlow({db,flow,lead,connection,resumeAfterId=null,audios=[]}){
+  assertExecutionScope(flow,lead,connection);
   const nodes=Array.isArray(flow.nodes)?flow.nodes:[];const edges=Array.isArray(flow.edges)?flow.edges:[];if(!nodes.length)return {completed:false,reason:'empty_flow'};
   const readyAudios=Array.isArray(audios)&&audios.length?audios:(Array.isArray(lead.order_context?.preview_audios)?lead.order_context.preview_audios:[]);
   let node=resumeAfterId?nextNode(nodes,edges,resumeAfterId):(nodes.find(item=>item.data?.kind==='start')||nodes[0]);if(node?.data?.kind==='start')node=nextNode(nodes,edges,node.id);let currentLead=lead;let variables=variablesFor(currentLead,{audios:readyAudios});
