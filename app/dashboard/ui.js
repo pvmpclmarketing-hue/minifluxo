@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { createBrowserClient } from '@supabase/ssr';
 import FlowCanvas from './flow-canvas';
 import ConnectionsPanel, { ConnectionCreationModal } from './connections-panel';
@@ -9,8 +10,9 @@ const labels={waiting_pix:'Aguardando Pix',waiting_briefing:'Aguardando briefing
 const contactSources={inbound:'Chamou primeiro',manual:'Chamado por disparo',site:'Chamado pelo site',payment:'Chamado apos pagamento'};
 const contactSource=item=>contactSources[item.order_context?.contact_origin||item.source]||'Chamado por disparo';
 
-export default function Dashboard({userEmail,initialLeads,initialConnections,initialFlows,initialDispatchConfigs}){
-  const [tab,setTab]=useState('dashboard');
+export default function Dashboard({initialTab='dashboard',userEmail,initialLeads,initialConnections,initialFlows,initialDispatchConfigs}){
+  const router=useRouter();
+  const [tab,setTab]=useState(initialTab);
   const [leads,setLeads]=useState(initialLeads);
   const [connections,setConnections]=useState(initialConnections);
   const [flows,setFlows]=useState(initialFlows);
@@ -21,6 +23,8 @@ export default function Dashboard({userEmail,initialLeads,initialConnections,ini
   const [error,setError]=useState('');
   const [origin,setOrigin]=useState('https://minifluxo.vercel.app');
   useEffect(()=>setOrigin(window.location.origin),[]);
+  useEffect(()=>{setLeads(initialLeads);setConnections(initialConnections);setFlows(initialFlows);setConfigs(initialDispatchConfigs);setSelected(current=>initialFlows.find(item=>item.id===current?.id)||initialFlows[0]||null);setTab(initialTab);},[initialLeads,initialConnections,initialFlows,initialDispatchConfigs,initialTab]);
+  const navigateTab=id=>{setTab(id);router.replace(`/dashboard?tab=${id}`,{scroll:false});router.refresh();};
 
   const connected=connections.find(item=>item.status==='connected');
   const metrics=useMemo(()=>({total:leads.length,waiting:leads.filter(item=>item.status!=='completed').length,complete:leads.filter(item=>item.status==='completed').length}),[leads]);
@@ -47,7 +51,7 @@ export default function Dashboard({userEmail,initialLeads,initialConnections,ini
   return <div className="shell">
     <aside className="side">
       <div className="brand"><div className="mark">W</div><span>Whats<span>Entregavel</span></span></div>
-      <nav>{menu.map(([id,text])=><button key={id} className={tab===id||tab==='flow'&&id==='flows'?'active':''} onClick={()=>setTab(id)}>{text}</button>)}</nav>
+      <nav>{menu.map(([id,text])=><button key={id} className={tab===id||tab==='flow'&&id==='flows'?'active':''} onClick={()=>navigateTab(id)}>{text}</button>)}</nav>
       <div className="side-foot"><div className={'dot '+(connected?'online':'')}/><small>{connected?`Conectado: ${connected.name}`:'WhatsApp desconectado'}</small></div>
     </aside>
     <main className="content">
