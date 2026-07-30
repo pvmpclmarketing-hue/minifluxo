@@ -40,7 +40,7 @@ export async function POST(request) {
     if (!flow || !connection) return NextResponse.json({ received: true, ignored: true, reason: 'flow_or_connection_unavailable' });
 
     // Claim this exact task before sending anything: callbacks repeated by Kie cannot duplicate or cross-deliver audio.
-    const { data: claimed, error: claimError } = await db.from('leads').update({ status: 'delivering', updated_at: new Date().toISOString() }).eq('id', lead.id).eq('owner_id', lead.owner_id).eq('connection_id', connection.id).eq('kie_task_id', taskId).eq('status', 'generating').select().maybeSingle();
+    const { data: claimed, error: claimError } = await db.from('leads').update({ status: 'delivering', order_context: { ...(lead.order_context || {}), kie_audios: urls }, updated_at: new Date().toISOString() }).eq('id', lead.id).eq('owner_id', lead.owner_id).eq('connection_id', connection.id).eq('kie_task_id', taskId).eq('status', 'generating').select().maybeSingle();
     if (claimError) throw claimError;
     if (!claimed) return NextResponse.json({ received: true, already_processed: true });
     claimedLead = claimed;
