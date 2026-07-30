@@ -47,6 +47,7 @@ create table if not exists public.flows (
   name text not null,
   description text,
   status text not null default 'active' check (status in ('active', 'paused')),
+  share_code text not null unique default ('FLW-' || upper(replace(gen_random_uuid()::text, '-', ''))),
   nodes jsonb not null default '[]'::jsonb,
   edges jsonb not null default '[]'::jsonb,
   created_at timestamptz not null default now(),
@@ -61,6 +62,9 @@ create table if not exists public.connection_flow_configs (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+alter table public.flows add column if not exists share_code text;
+update public.flows set share_code = 'FLW-' || upper(replace(gen_random_uuid()::text, '-', '')) where share_code is null;
+create unique index if not exists flows_share_code_unique_idx on public.flows(share_code);
 alter table public.connection_flow_configs add column if not exists conversation_flow_id uuid references public.flows(id) on delete set null;
 
 -- Chave estavel por conta. O usuario pode trocar de WhatsApp sem alterar o site.
