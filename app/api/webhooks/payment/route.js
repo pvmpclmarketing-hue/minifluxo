@@ -44,8 +44,10 @@ function fulfillmentMode(body) {
 }
 
 export async function POST(request) {
+  let stage = 'authorization';
   try {
     if (!process.env.PAYMENT_WEBHOOK_SECRET || request.headers.get('x-payment-secret') !== process.env.PAYMENT_WEBHOOK_SECRET) return new NextResponse(null, { status: 401 });
+    stage = 'payload_validation';
     const body = await request.json();
     if (body.event !== 'PAYMENT_APPROVED') return NextResponse.json({ received: true, ignored: true });
     if (!body.customer?.name || !body.customer?.phone) return NextResponse.json({ error: 'customer.name e customer.phone sao obrigatorios.' }, { status: 400 });
@@ -54,9 +56,11 @@ export async function POST(request) {
     const orderId = body.order_id || body.orderId || null;
     if (!orderId) return NextResponse.json({ error: 'order_id e obrigatorio para evitar disparos duplicados.' }, { status: 400 });
 
+    stage = 'connection_resolution';
     const db = adminClient();
     const connection = await resolveConnection(db, body);
     if (!connection) return NextResponse.json({ error: 'Informe uma integration_key valida.' }, { status: 400 });
+    stage = 'flow_configuration';
     const { data: config, error: configError } = await db.from('connection_flow_configs').select('payment_flow_id,owner_id').eq('connection_id', connection.id).single();
     if (configError || !config?.payment_flow_id) return NextResponse.json({ error: 'Nenhum fluxo de pagamento configurado para esta conexao.' }, { status: 404 });
     const { data: flow, error: flowError } = await db.from('flows').select('id,owner_id').eq('id', config.payment_flow_id).eq('owner_id', config.owner_id).single();
@@ -81,17 +85,20 @@ export async function POST(request) {
     };
     const leadValues = { name: body.customer.name, phone, music_request: musicRequest, status: audios.length ? 'in_progress' : 'generating', connection_id: connection.id, order_context: orderContext, updated_at: new Date().toISOString() };
     let lead;
+    stage = 'idempotency_check';
     if (orderContext.sourceOrderId) {
       const { data: existing } = await db.from('leads').select('id,status').eq('owner_id', flow.owner_id).eq('external_order_id', orderContext.sourceOrderId).maybeSingle();
       if (existing) {
         return NextResponse.json({ received: true, duplicate: true, execution_id: existing.id, status: existing.status });
       }
     }
+    stage = 'create_lead';
     if (!lead) {
       const { data, error } = await db.from('leads').insert({ owner_id: flow.owner_id, source: 'payment', provider: 'payment', external_order_id: orderContext.sourceOrderId, ...leadValues }).select().single();
       if (error) throw error;
       lead = data;
     }
+    stage = 'execute_flow';
     if (connection.status === 'connected') {
       const { data: executionFlow } = await db.from('flows').select('*').eq('id', config.payment_flow_id).eq('owner_id', config.owner_id).maybeSingle();
       if (executionFlow?.status === 'active') await executeFlow({ db, flow: executionFlow, lead, connection, audios });
@@ -99,6 +106,7 @@ export async function POST(request) {
     }
     return NextResponse.json({ received: true, execution_id: lead.id, preview_tracks: audios.length });
   } catch (error) {
+    console.error('[payment webhook] failed', { stage, error: error?.message || String(error) });
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }
