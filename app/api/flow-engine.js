@@ -52,8 +52,15 @@ async function startKie(db,flow,lead,node,variables){
   const title=`Música para ${lead.name}`.slice(0,80);const voice=quiz.voice_gender||quiz.vocal_gender||quiz.genero_voz;
   const payload={prompt:String(prompt).slice(0,5000),customMode:true,instrumental:!!config.instrumental,model:modelName(config.model),style:String(style).slice(0,1000),title,callBackUrl:`https://${callbackBase}/api/webhooks/kie?secret=${encodeURIComponent(callbackSecret)}`};
   if(voice==='m'||voice==='f')payload.vocalGender=voice;
-  const response=await fetch(`${String(process.env.KIE_API_BASE_URL||'https://api.kie.ai').replace(/\/$/,'')}${process.env.KIE_MUSIC_ENDPOINT||'/api/v1/generate'}`,{method:'POST',headers:{Authorization:`Bearer ${key}`,'Content-Type':'application/json'},body:JSON.stringify(payload)});const raw=await response.text();let result={};try{result=JSON.parse(raw);}catch{}if(!response.ok)throw new Error(`Kie.ai: ${response.status} ${result.msg||raw}`);
-  const taskId=result.data?.taskId||result.taskId;if(!taskId)throw new Error('A Kie.ai não retornou o identificador da geração.');
+  const endpoint=`${String(process.env.KIE_API_BASE_URL||'https://api.kie.ai').replace(/\/$/,'')}${process.env.KIE_MUSIC_ENDPOINT||'/api/v1/generate'}`;
+  const response=await fetch(endpoint,{method:'POST',headers:{Authorization:`Bearer ${key}`,'Content-Type':'application/json'},body:JSON.stringify(payload)});
+  const raw=await response.text();let result={};try{result=JSON.parse(raw);}catch{}
+  const providerMessage=result.msg||result.message||result.error?.message||'';
+  if(!response.ok)throw new Error(`Kie.ai: ${response.status} ${providerMessage||'não foi possível iniciar a geração.'}`);
+  if(result.code!==undefined&&Number(result.code)!==200)throw new Error(`Kie.ai: ${providerMessage||`código ${result.code}`}`);
+  const taskId=result.data?.taskId||result.data?.task_id||result.taskId||result.task_id||result.data?.id||result.id;
+  if(!taskId){console.error('[kie generation] missing task id',{status:response.status,api_code:result.code??null,message:providerMessage||null,endpoint:new URL(endpoint).pathname,result_keys:Object.keys(result),data_keys:result.data&&typeof result.data==='object'?Object.keys(result.data):[]});throw new Error(`Kie.ai não iniciou a geração: ${providerMessage||'resposta sem identificador da tarefa.'}`);}
+  console.info('[kie generation] task accepted',{task_id:String(taskId),endpoint:new URL(endpoint).pathname});
   const context={...(lead.order_context||{}),flow_execution:{flow_id:flow.id,kie_node_id:node.id}};await db.from('leads').update({status:'generating',kie_task_id:taskId,order_context:context,updated_at:new Date().toISOString()}).eq('id',lead.id);return {waitingKie:true,taskId};
 }
 
