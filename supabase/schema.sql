@@ -78,21 +78,33 @@ create table if not exists public.flow_credentials (
   updated_at timestamptz not null default now()
 );
 
+-- Credenciais da conta: usadas por todos os fluxos do mesmo usuário.
+-- Os valores chegam aqui já criptografados pelo backend.
+create table if not exists public.account_credentials (
+  owner_id uuid primary key references auth.users(id) on delete cascade,
+  gpt_key_cipher text,
+  kie_key_cipher text,
+  updated_at timestamptz not null default now()
+);
+
 alter table public.connections enable row level security;
 alter table public.leads enable row level security;
 alter table public.flows enable row level security;
 alter table public.connection_flow_configs enable row level security;
 alter table public.flow_credentials enable row level security;
+alter table public.account_credentials enable row level security;
 alter table public.site_integrations enable row level security;
 drop policy if exists "users access own connections" on public.connections;
 drop policy if exists "users access own leads" on public.leads;
 drop policy if exists "users access own flows" on public.flows;
 drop policy if exists "users access own connection flow configs" on public.connection_flow_configs;
 drop policy if exists "users access own flow credentials" on public.flow_credentials;
+drop policy if exists "users access own account credentials" on public.account_credentials;
 drop policy if exists "users access own site integration" on public.site_integrations;
 create policy "users access own connections" on public.connections for all using (auth.uid() = owner_id) with check (auth.uid() = owner_id);
 create policy "users access own leads" on public.leads for all using (auth.uid() = owner_id) with check (auth.uid() = owner_id);
 create policy "users access own flows" on public.flows for all using (auth.uid() = owner_id) with check (auth.uid() = owner_id);
 create policy "users access own connection flow configs" on public.connection_flow_configs for all using (auth.uid() = owner_id) with check (auth.uid() = owner_id);
 create policy "users access own flow credentials" on public.flow_credentials for all using (auth.uid() = owner_id) with check (auth.uid() = owner_id);
+create policy "users access own account credentials" on public.account_credentials for all using (auth.uid() = owner_id) with check (auth.uid() = owner_id);
 create policy "users access own site integration" on public.site_integrations for all using (auth.uid() = owner_id) with check (auth.uid() = owner_id);
