@@ -83,13 +83,21 @@ export async function POST(request) {
       preview_audios: audios,
       preview_task_id: body.preview?.task_id || body.preview?.taskId || body.kie_task_id || null,
     };
-    const leadValues = { name: body.customer.name, phone, music_request: musicRequest, status: audios.length ? 'in_progress' : 'generating', connection_id: connection.id, order_context: orderContext, updated_at: new Date().toISOString() };
+    // A geração só passa a ser "generating" depois que a Kie devolve um taskId.
+    // Antes disso o pedido pode ser reenviado com segurança caso uma etapa falhe.
+    const leadValues = { name: body.customer.name, phone, music_request: musicRequest, status: 'in_progress', connection_id: connection.id, order_context: orderContext, updated_at: new Date().toISOString() };
     let lead;
     stage = 'idempotency_check';
     if (orderContext.sourceOrderId) {
-      const { data: existing } = await db.from('leads').select('id,status').eq('owner_id', flow.owner_id).eq('external_order_id', orderContext.sourceOrderId).maybeSingle();
+      const { data: existing } = await db.from('leads').select('id,status,kie_task_id,order_context').eq('owner_id', flow.owner_id).eq('external_order_id', orderContext.sourceOrderId).maybeSingle();
       if (existing) {
-        return NextResponse.json({ received: true, duplicate: true, execution_id: existing.id, status: existing.status });
+        const execution = existing.order_context?.flow_execution || {};
+        const isWaiting = Boolean(execution.wait_node_id || execution.delay_node_id || execution.kie_node_id);
+        const retryable = !existing.kie_task_id && !isWaiting && ['new', 'in_progress', 'generating', 'failed', 'error'].includes(existing.status);
+        if (!retryable) return NextResponse.json({ received: true, duplicate: true, execution_id: existing.id, status: existing.status });
+        const { data, error } = await db.from('leads').update(leadValues).eq('id', existing.id).select().single();
+        if (error) throw error;
+        lead = data;
       }
     }
     stage = 'create_lead';
@@ -101,7 +109,10 @@ export async function POST(request) {
     stage = 'execute_flow';
     if (connection.status === 'connected') {
       const { data: executionFlow } = await db.from('flows').select('*').eq('id', config.payment_flow_id).eq('owner_id', config.owner_id).maybeSingle();
-      if (executionFlow?.status === 'active') await executeFlow({ db, flow: executionFlow, lead, connection, audios });
+      if (executionFlow?.status === 'active') {
+        const result = await executeFlow({ db, flow: executionFlow, lead, connection, audios });
+        console.info('[payment webhook] flow execution finished', { lead_id: lead.id, result });
+      }
       else await sendText(connection, phone, `Pagamento confirmado, ${body.customer.name}! Sua musica entrou na fila de criacao.`);
     }
     return NextResponse.json({ received: true, execution_id: lead.id, preview_tracks: audios.length });
