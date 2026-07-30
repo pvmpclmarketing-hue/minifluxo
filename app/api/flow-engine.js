@@ -18,12 +18,17 @@ async function runAi(db,flow,lead,connection,node,variables){const config=node.d
 
 async function startKie(db,flow,lead,node,variables){
   const key=(await credentialsFor(db,flow.id)).kie;if(!key)throw new Error('Cadastre a chave Kie.ai neste fluxo antes de gerar música.');
-  const config=node.data?.config||{};const callbackBase=String(process.env.WHATSENTREGAVEL_URL||'').replace(/\/$/,'');if(!callbackBase)throw new Error('Configure WHATSENTREGAVEL_URL na Vercel.');
+  const config=node.data?.config||{};
+  // A URL fixa é preferível, mas o domínio da implantação é um fallback seguro
+  // para que uma conta recém-publicada consiga receber o callback da Kie.
+  const deploymentHost=process.env.VERCEL_PROJECT_PRODUCTION_URL||process.env.VERCEL_URL||'';
+  const callbackBase=String(process.env.WHATSENTREGAVEL_URL||deploymentHost).replace(/^https?:\/\//,'').replace(/\/$/,'');
+  if(!callbackBase)throw new Error('Não foi possível identificar a URL pública para o callback da Kie.');
   const callbackSecret=process.env.KIE_WEBHOOK_SECRET;if(!callbackSecret)throw new Error('Configure KIE_WEBHOOK_SECRET na Vercel.');
   const quiz=variables.quiz||{};const prompt=variables.lyric_text||variables.music_request||variables.story;if(!prompt)throw new Error('O pedido não possui letra ou briefing para gerar a música.');
   const style=config.style||quiz.music_style||quiz.genre||quiz.genre_musical||'música personalizada emocionante';
   const title=`Música para ${lead.name}`.slice(0,80);const voice=quiz.voice_gender||quiz.vocal_gender||quiz.genero_voz;
-  const payload={prompt:String(prompt).slice(0,5000),customMode:true,instrumental:!!config.instrumental,model:modelName(config.model),style:String(style).slice(0,1000),title,callBackUrl:`${callbackBase}/api/webhooks/kie?secret=${encodeURIComponent(callbackSecret)}`};
+  const payload={prompt:String(prompt).slice(0,5000),customMode:true,instrumental:!!config.instrumental,model:modelName(config.model),style:String(style).slice(0,1000),title,callBackUrl:`https://${callbackBase}/api/webhooks/kie?secret=${encodeURIComponent(callbackSecret)}`};
   if(voice==='m'||voice==='f')payload.vocalGender=voice;
   const response=await fetch(`${String(process.env.KIE_API_BASE_URL||'https://api.kie.ai').replace(/\/$/,'')}${process.env.KIE_MUSIC_ENDPOINT||'/api/v1/generate'}`,{method:'POST',headers:{Authorization:`Bearer ${key}`,'Content-Type':'application/json'},body:JSON.stringify(payload)});const raw=await response.text();let result={};try{result=JSON.parse(raw);}catch{}if(!response.ok)throw new Error(`Kie.ai: ${response.status} ${result.msg||raw}`);
   const taskId=result.data?.taskId||result.taskId;if(!taskId)throw new Error('A Kie.ai não retornou o identificador da geração.');
