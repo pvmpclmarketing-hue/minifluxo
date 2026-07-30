@@ -15,6 +15,16 @@ function audioUrls(value,found=new Set()){
   if(typeof value==='object'){Object.entries(value).forEach(([key,item])=>{if(/audio(url)?/i.test(key)&&typeof item==='string'&&/^https?:\/\//.test(item))found.add(item);else audioUrls(item,found);});return [...found];}
   if(typeof value==='string'&&/^https?:\/\//.test(value)&&/\.mp3([?#]|$)/i.test(value))found.add(value);return [...found];
 }
+async function saveDeliveryProgress(db,lead,connection,audios,progress,status='delivering'){
+  const orderContext={...(lead.order_context||{}),delivery:{...(lead.order_context?.delivery||{}),audios,sent_indexes:progress.sent_indexes||[],intro_sent:!!progress.intro_sent}};
+  const {data,error}=await db.from('leads').update({status,order_context:orderContext,updated_at:new Date().toISOString()}).eq('id',lead.id).eq('owner_id',lead.owner_id).eq('connection_id',connection.id).select().single();if(error)throw error;return data;
+}
+async function deliverAudioTracks(db,lead,connection,audios,intro){
+  const saved=lead.order_context?.delivery||{};let currentLead=lead;let sentIndexes=Array.isArray(saved.sent_indexes)?saved.sent_indexes:[];let introSent=!!saved.intro_sent;
+  if(intro&&!introSent){await sendText(connection,currentLead.phone,intro);introSent=true;currentLead=await saveDeliveryProgress(db,currentLead,connection,audios,{sent_indexes:sentIndexes,intro_sent:introSent});}
+  for(let index=0;index<Math.min(2,audios.length);index+=1){if(sentIndexes.includes(index))continue;await sendAudio(connection,currentLead.phone,audios[index],`Música ${index+1} de ${Math.min(2,audios.length)}`);sentIndexes=[...sentIndexes,index];currentLead=await saveDeliveryProgress(db,currentLead,connection,audios,{sent_indexes:sentIndexes,intro_sent:introSent});}
+  return currentLead;
+}
 
 function variablesFor(lead,extra={}){
   const context=lead.order_context||{};return {name:lead.name,phone:lead.phone,story:context.story||'',lyric_text:context.lyricText||lead.music_request||'',music_request:lead.music_request||'',last_message:context.last_message||'',quiz:context.quiz||{},flow_data:context.flow_data||{},paid:!!context.paid,lead:{id:lead.id,...lead},kie:{audios:extra.audios||[]},...extra};
@@ -56,19 +66,19 @@ export async function executeFlow({db,flow,lead,connection,resumeAfterId=null,au
     if(kind==='ai'){const result=await runAi(db,flow,currentLead,connection,node,variables);currentLead=result.lead;variables={...result.variables,kie:{...(result.variables.kie||{}),audios:readyAudios}};}
     if(kind==='condition'){const matched=conditionMatches(config,variables);node=nextNode(nodes,edges,node.id,matched?'true':'false');if(!node)return {completed:false,reason:matched?'condition_true_path_missing':'condition_false_path_missing'};continue;}
     if(kind==='kie'){if(readyAudios.length){node=nextNode(nodes,edges,node.id);continue;}if(!variables.paid){await db.from('leads').update({status:'waiting_pix',updated_at:new Date().toISOString()}).eq('id',currentLead.id);return {waiting:true,reason:'payment_required'};}return startKie(db,flow,currentLead,node,variables);}
-    if(kind==='deliver'||kind==='previewDeliver'){if(!readyAudios.length)return {completed:false,reason:kind==='previewDeliver'?'preview_audio_not_ready':'audio_not_ready'};const intro=render(config.intro||(kind==='previewDeliver'?'Sua música está pronta! Vou enviar as duas faixas da sua prévia em áudio.':'Sua música está pronta! Vou enviar as duas faixas em áudio.'),variables);if(intro)await sendText(connection,currentLead.phone,intro);for(let index=0;index<Math.min(2,readyAudios.length);index+=1)await sendAudio(connection,currentLead.phone,readyAudios[index],`Música ${index+1} de ${Math.min(2,readyAudios.length)}`);await db.from('leads').update({status:'completed',music_url:JSON.stringify(readyAudios.slice(0,2)),updated_at:new Date().toISOString()}).eq('id',currentLead.id);return {completed:true,delivered:Math.min(2,readyAudios.length)};}
+    if(kind==='deliver'||kind==='previewDeliver'){if(!readyAudios.length)return {completed:false,reason:kind==='previewDeliver'?'preview_audio_not_ready':'audio_not_ready'};const intro=render(config.intro||(kind==='previewDeliver'?'Sua música está pronta! Vou enviar as duas faixas da sua prévia em áudio.':'Sua música está pronta! Vou enviar as duas faixas em áudio.'),variables);currentLead=await deliverAudioTracks(db,currentLead,connection,readyAudios,intro);await db.from('leads').update({status:'completed',music_url:JSON.stringify(readyAudios.slice(0,2)),updated_at:new Date().toISOString()}).eq('id',currentLead.id).eq('owner_id',currentLead.owner_id).eq('connection_id',connection.id);return {completed:true,delivered:Math.min(2,readyAudios.length)};}
     node=nextNode(nodes,edges,node.id);
   }return {completed:true};
 }
 
-export async function retryKieDelivery({db,flow,lead,connection}){
+export async function retryKieDelivery({db,flow,lead,connection,assumeFirstTrackDelivered=false}){
   assertExecutionScope(flow,lead,connection);
   if(lead.status!=='delivery_failed')throw new Error('Somente entregas que falharam podem ser reenviadas.');
   const key=(await credentialsFor(db,flow.id,flow.owner_id)).kie;if(!key)throw new Error('A chave Kie.ai desta conta não está configurada.');
   const response=await fetch(`${String(process.env.KIE_API_BASE_URL||'https://api.kie.ai').replace(/\/$/,'')}/api/v1/generate/record-info?taskId=${encodeURIComponent(lead.kie_task_id||'')}`,{headers:{Authorization:`Bearer ${key}`}});
   const payload=await response.json().catch(()=>({}));if(!response.ok)throw new Error(`Kie.ai: ${response.status} ${payload.msg||'Não foi possível consultar a música.'}`);
   const audios=audioUrls(payload.data?.response?.sunoData||payload).slice(0,2);if(audios.length<2)throw new Error('A Kie.ai ainda não disponibilizou as duas faixas para reenvio.');
-  const context={...(lead.order_context||{}),kie_audios:audios};const {data:claimed,error}=await db.from('leads').update({status:'delivering',order_context:context,updated_at:new Date().toISOString()}).eq('id',lead.id).eq('owner_id',lead.owner_id).eq('connection_id',connection.id).eq('status','delivery_failed').select().single();if(error)throw error;
+  const savedIndexes=Array.isArray(lead.order_context?.delivery?.sent_indexes)?lead.order_context.delivery.sent_indexes:[];const context={...(lead.order_context||{}),kie_audios:audios,delivery:{...(lead.order_context?.delivery||{}),audios,sent_indexes:savedIndexes.length||!assumeFirstTrackDelivered?savedIndexes:[0],intro_sent:lead.order_context?.delivery?.intro_sent||assumeFirstTrackDelivered}};const {data:claimed,error}=await db.from('leads').update({status:'delivering',order_context:context,updated_at:new Date().toISOString()}).eq('id',lead.id).eq('owner_id',lead.owner_id).eq('connection_id',connection.id).eq('status','delivery_failed').select().single();if(error)throw error;
   try{return await executeFlow({db,flow,lead:claimed,connection,resumeAfterId:context.flow_execution?.kie_node_id,audios});}
   catch(error){await db.from('leads').update({status:'delivery_failed',updated_at:new Date().toISOString()}).eq('id',claimed.id).eq('owner_id',claimed.owner_id).eq('connection_id',connection.id).eq('status','delivering');throw error;}
 }
