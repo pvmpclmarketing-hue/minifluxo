@@ -12,8 +12,8 @@ function assertExecutionScope(flow,lead,connection){
 }
 function audioUrls(value,found=new Set()){
   if(!value)return [...found];if(Array.isArray(value)){value.forEach(item=>audioUrls(item,found));return [...found];}
-  if(typeof value==='object'){Object.entries(value).forEach(([key,item])=>{const normalizedKey=key.replace(/[^a-z0-9]/gi,'').toLowerCase();const isAudioUrlKey=(normalizedKey==='audio'||normalizedKey.endsWith('audiourl'))&&!normalizedKey.includes('image')&&!normalizedKey.includes('cover')&&!normalizedKey.includes('artwork');if(isAudioUrlKey&&typeof item==='string'&&/^https?:\/\//.test(item))found.add(item);else audioUrls(item,found);});return [...found];}
-  if(typeof value==='string'&&/^https?:\/\//.test(value)&&/\.mp3([?#]|$)/i.test(value))found.add(value);return [...found];
+  if(typeof value==='object'){Object.entries(value).forEach(([key,item])=>{const normalizedKey=key.replace(/[^a-z0-9]/gi,'').toLowerCase();if(normalizedKey==='audiourl'&&typeof item==='string'&&/^https?:\/\//.test(item))found.add(item);else if(item&&typeof item==='object')audioUrls(item,found);});return [...found];}
+  return [...found];
 }
 async function saveDeliveryProgress(db,lead,connection,audios,progress,status='delivering'){
   const orderContext={...(lead.order_context||{}),delivery:{...(lead.order_context?.delivery||{}),audios,sent_indexes:progress.sent_indexes||[],intro_sent:!!progress.intro_sent}};
