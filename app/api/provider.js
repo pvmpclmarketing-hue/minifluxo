@@ -5,6 +5,7 @@ async function uazAudioFile(audioUrl){
   const response=await fetch(audioUrl);if(!response.ok)throw new Error(`Não foi possível baixar o áudio gerado: ${response.status}`);
   const contentType=response.headers.get('content-type')?.split(';')[0]||'audio/mpeg';const bytes=Buffer.from(await response.arrayBuffer());
   if(!bytes.length)throw new Error('O arquivo de áudio gerado está vazio.');
+  if(!contentType.startsWith('audio/'))throw new Error(`A Kie.ai devolveu mídia inválida no lugar do áudio (${contentType}).`);
   if(bytes.length>18*1024*1024)throw new Error('O arquivo de áudio excede o limite seguro de envio.');
   return `data:${contentType};base64,${bytes.toString('base64')}`;
 }

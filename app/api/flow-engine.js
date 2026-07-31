@@ -12,7 +12,7 @@ function assertExecutionScope(flow,lead,connection){
 }
 function audioUrls(value,found=new Set()){
   if(!value)return [...found];if(Array.isArray(value)){value.forEach(item=>audioUrls(item,found));return [...found];}
-  if(typeof value==='object'){Object.entries(value).forEach(([key,item])=>{if(/audio(url)?/i.test(key)&&typeof item==='string'&&/^https?:\/\//.test(item))found.add(item);else audioUrls(item,found);});return [...found];}
+  if(typeof value==='object'){Object.entries(value).forEach(([key,item])=>{const normalizedKey=key.replace(/[^a-z0-9]/gi,'').toLowerCase();const isAudioUrlKey=(normalizedKey==='audio'||normalizedKey.endsWith('audiourl'))&&!normalizedKey.includes('image')&&!normalizedKey.includes('cover')&&!normalizedKey.includes('artwork');if(isAudioUrlKey&&typeof item==='string'&&/^https?:\/\//.test(item))found.add(item);else audioUrls(item,found);});return [...found];}
   if(typeof value==='string'&&/^https?:\/\//.test(value)&&/\.mp3([?#]|$)/i.test(value))found.add(value);return [...found];
 }
 async function saveDeliveryProgress(db,lead,connection,audios,progress,status='delivering'){
