@@ -6,8 +6,13 @@ import { executeFlow } from '../../flow-engine';
 function audioUrls(value, found = new Set()) {
   if (!value) return [...found];
   if (Array.isArray(value)) { value.forEach((item) => audioUrls(item, found)); return [...found]; }
-  if (typeof value === 'object') { Object.values(value).forEach((item) => audioUrls(item, found)); return [...found]; }
-  if (typeof value === 'string' && /^https?:\/\//.test(value) && (/\.mp3([?#]|$)/i.test(value) || /audio|music/i.test(value))) found.add(value);
+  if (typeof value === 'object') {
+    Object.entries(value).forEach(([key, item]) => {
+      const normalizedKey = key.replace(/[^a-z0-9]/gi, '').toLowerCase();
+      if (normalizedKey === 'audiourl' && typeof item === 'string' && /^https?:\/\//.test(item)) found.add(item);
+      else if (item && typeof item === 'object') audioUrls(item, found);
+    });
+  }
   return [...found];
 }
 
@@ -30,7 +35,8 @@ export async function POST(request) {
     const { data: lead } = await db.from('leads').select('*').eq('kie_task_id', taskId).eq('status', 'generating').maybeSingle();
     console.info('[kie webhook] callback received', { task_id: taskId, stage, audio_count: urls.length, lead_found: !!lead });
     if (!lead) return NextResponse.json({ received: true, already_processed: true });
-    if (!stage.includes('complete') && urls.length < 2) return NextResponse.json({ received: true, waiting: true });
+    const generationComplete = stage.includes('complete') || stage.includes('success');
+    if (!generationComplete) return NextResponse.json({ received: true, waiting: true, reason: 'generation_not_complete' });
     if (urls.length < 2) return NextResponse.json({ received: true, waiting: true, reason: 'two_audio_urls_required' });
 
     const execution = lead.order_context?.flow_execution;
