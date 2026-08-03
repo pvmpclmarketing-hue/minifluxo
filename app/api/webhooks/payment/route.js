@@ -52,14 +52,9 @@ export async function POST(request) {
     if (body.event !== 'PAYMENT_APPROVED') return NextResponse.json({ received: true, ignored: true });
     if (!body.customer?.name || !body.customer?.phone) return NextResponse.json({ error: 'customer.name e customer.phone sao obrigatorios.' }, { status: 400 });
     const mode = fulfillmentMode(body);
-    if (!['deliver_existing_preview_audio', 'generate_music_in_miniflux', 'site_delivery'].includes(mode)) return NextResponse.json({ error: 'fulfillment.mode deve ser deliver_existing_preview_audio, generate_music_in_miniflux ou site_delivery.' }, { status: 400 });
+    if (!['deliver_existing_preview_audio', 'generate_music_in_miniflux'].includes(mode)) return NextResponse.json({ error: 'fulfillment.mode deve ser deliver_existing_preview_audio ou generate_music_in_miniflux.' }, { status: 400 });
     const orderId = body.order_id || body.orderId || null;
     if (!orderId) return NextResponse.json({ error: 'order_id e obrigatorio para evitar disparos duplicados.' }, { status: 400 });
-
-    // As versões de entrega no próprio site também notificam o pagamento. O
-    // WhatsEntregavel confirma o recebimento, mas não cria lead, mensagem ou
-    // geração — isso impediria a duplicidade da entrega do site.
-    if (mode === 'site_delivery') return NextResponse.json({ received: true, handled_by: 'site', order_id: orderId, fulfillment_mode: mode });
 
     stage = 'connection_resolution';
     const db = adminClient();
