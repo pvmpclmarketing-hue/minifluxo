@@ -61,10 +61,11 @@ export async function POST(request) {
     const connection = await resolveConnection(db, body);
     if (!connection) return NextResponse.json({ error: 'Informe uma integration_key valida.' }, { status: 400 });
     stage = 'flow_configuration';
-    const { data: config, error: configError } = await db.from('connection_flow_configs').select('payment_flow_id,owner_id').eq('connection_id', connection.id).single();
+    const { data: config, error: configError } = await db.from('connection_flow_configs').select('payment_preview_flow_id,payment_generation_flow_id,owner_id').eq('connection_id', connection.id).single();
     if (config?.owner_id !== connection.owner_id) return NextResponse.json({ error: 'A configuração não pertence à conta desta conexão.' }, { status: 403 });
-    if (configError || !config?.payment_flow_id) return NextResponse.json({ error: 'Nenhum fluxo de pagamento configurado para esta conexao.' }, { status: 404 });
-    const { data: flow, error: flowError } = await db.from('flows').select('id,owner_id').eq('id', config.payment_flow_id).eq('owner_id', config.owner_id).single();
+    const flowId = mode === 'deliver_existing_preview_audio' ? config?.payment_preview_flow_id : config?.payment_generation_flow_id;
+    if (configError || !flowId) return NextResponse.json({ error: mode === 'deliver_existing_preview_audio' ? 'Nenhum fluxo de pagamento com prévia pronta está configurado para esta conexão.' : 'Nenhum fluxo de pagamento sem prévia está configurado para esta conexão.' }, { status: 404 });
+    const { data: flow, error: flowError } = await db.from('flows').select('id,owner_id').eq('id', flowId).eq('owner_id', config.owner_id).single();
     if (flowError || !flow) return NextResponse.json({ error: 'Fluxo configurado nao encontrado.' }, { status: 404 });
 
     const phone = String(body.customer.phone).replace(/\D/g, '');
@@ -109,14 +110,14 @@ export async function POST(request) {
     }
     stage = 'execute_flow';
     if (connection.status === 'connected') {
-      const { data: executionFlow } = await db.from('flows').select('*').eq('id', config.payment_flow_id).eq('owner_id', config.owner_id).maybeSingle();
+      const { data: executionFlow } = await db.from('flows').select('*').eq('id', flowId).eq('owner_id', config.owner_id).maybeSingle();
       if (executionFlow?.status === 'active') {
         const result = await executeFlow({ db, flow: executionFlow, lead, connection, audios });
         console.info('[payment webhook] flow execution finished', { lead_id: lead.id, result });
       }
       else await sendText(connection, phone, `Pagamento confirmado, ${body.customer.name}! Sua musica entrou na fila de criacao.`);
     }
-    return NextResponse.json({ received: true, execution_id: lead.id, preview_tracks: audios.length });
+    return NextResponse.json({ received: true, execution_id: lead.id, flow_id: flowId, fulfillment_mode: mode, preview_tracks: audios.length });
   } catch (error) {
     console.error('[payment webhook] failed', { stage, error: error?.message || String(error) });
     return NextResponse.json({ error: error.message }, { status: 500 });
