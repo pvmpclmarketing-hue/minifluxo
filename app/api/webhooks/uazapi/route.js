@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { adminClient } from '../../supabase';
 import { hashSecret } from '../../connection-secrets';
-import { executeFlow } from '../../flow-engine';
+import { executeFlow, resolveMenuChoice } from '../../flow-engine';
 
 const digits=value=>String(value||'').replace(/\D/g,'');
 const eventName=body=>String(body.EventType||body.event||body.type||body.data?.EventType||body.data?.event||'').toLowerCase();
@@ -25,8 +25,8 @@ export async function POST(request){
     const text=messageText(body);if(!phone)return NextResponse.json({received:true,ignored:true});
     const {data:config}=await db.from('connection_flow_configs').select('conversation_flow_id,owner_id').eq('connection_id',connection.id).maybeSingle();
     if(!config||config.owner_id!==connection.owner_id)return NextResponse.json({received:true,ignored:true});
-    const {data:contacts=[]}=await db.from('leads').select('*').eq('connection_id',connection.id).eq('phone',phone).order('updated_at',{ascending:false});const existing=contacts.find(item=>item.status==='waiting_response'&&item.order_context?.flow_execution?.wait_node_id);
-    if(existing){const context={...(existing.order_context||{}),last_message:text};const values={order_context:context,status:'in_progress',updated_at:new Date().toISOString()};if(name)values.name=name;const {data:lead}=await db.from('leads').update(values).eq('id',existing.id).select().single();const {data:flow}=await db.from('flows').select('*').eq('id',existing.order_context.flow_execution.flow_id).eq('owner_id',existing.owner_id).maybeSingle();if(flow?.status==='active')await executeFlow({db,flow,lead,connection,resumeAfterId:existing.order_context.flow_execution.wait_node_id});return NextResponse.json({received:true,resumed:true});}
+    const {data:contacts=[]}=await db.from('leads').select('*').eq('connection_id',connection.id).eq('phone',phone).order('updated_at',{ascending:false});const existing=contacts.find(item=>item.status==='waiting_response'&&(item.order_context?.flow_execution?.wait_node_id||item.order_context?.flow_execution?.menu_node_id));
+    if(existing){const context={...(existing.order_context||{}),last_message:text};const execution=context.flow_execution||{};const {data:flow}=await db.from('flows').select('*').eq('id',execution.flow_id).eq('owner_id',existing.owner_id).maybeSingle();let resumeAfterId=execution.wait_node_id;let resumeHandle=null;if(execution.menu_node_id&&flow){const menuNode=(Array.isArray(flow.nodes)?flow.nodes:[]).find(node=>node.id===execution.menu_node_id);const choice=resolveMenuChoice(menuNode,text);const keys=choice.saveTo.split('.');const flowData={...(context.flow_data||{})};let cursor=flowData;keys.forEach((key,index)=>{if(index===keys.length-1)cursor[key]=choice.selection;else {cursor[key]={...(cursor[key]||{})};cursor=cursor[key];}});context.flow_data=flowData;resumeAfterId=execution.menu_node_id;resumeHandle=choice.sourceHandle;}const values={order_context:context,status:'in_progress',updated_at:new Date().toISOString()};if(name)values.name=name;const {data:lead}=await db.from('leads').update(values).eq('id',existing.id).select().single();if(flow?.status==='active')await executeFlow({db,flow,lead,connection,resumeAfterId,resumeHandle});return NextResponse.json({received:true,resumed:true,menu:!!execution.menu_node_id});}
     if(contacts.length){if(name)await db.from('leads').update({name,updated_at:new Date().toISOString()}).eq('id',contacts[0].id);return NextResponse.json({received:true,ignored:true,reason:'contact_already_in_history'});}
     // Respostas de fluxos em espera continuam sendo tratadas acima. Este gatilho
     // deixou de iniciar fluxos novos pela primeira mensagem recebida.
