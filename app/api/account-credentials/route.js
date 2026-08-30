@@ -29,7 +29,12 @@ export async function PATCH(request) {
       if (body.efiCertificateP12.length>1024*1024) return NextResponse.json({ error: 'O certificado P12 excede o limite de 1 MB.' }, { status: 400 });
       values.efi_certificate_p12_cipher = encryptSecret(body.efiCertificateP12.trim());
     }
-    if (typeof body.efiCertificatePassword === 'string' && body.efiCertificatePassword.trim()) values.efi_certificate_password_cipher = encryptSecret(body.efiCertificatePassword.trim());
+    // An empty password is meaningful: it clears a previous certificate password.
+    // Keeping the old encrypted password would make a new passwordless P12 fail
+    // with OpenSSL's "mac verify failure".
+    if (typeof body.efiCertificatePassword === 'string') {
+      values.efi_certificate_password_cipher = body.efiCertificatePassword.trim() ? encryptSecret(body.efiCertificatePassword.trim()) : null;
+    }
     if (typeof body.efiPixKey === 'string' && body.efiPixKey.trim()) values.efi_pix_key_cipher = encryptSecret(body.efiPixKey.trim());
     if (body.efiEnvironment==='homologation'||body.efiEnvironment==='production') values.efi_environment=body.efiEnvironment;
     if (Object.keys(values).length===2) return NextResponse.json({ error: 'Informe ao menos uma credencial.' }, { status: 400 });
