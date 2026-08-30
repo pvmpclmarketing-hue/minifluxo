@@ -3,6 +3,12 @@ create table if not exists public.account_credentials (
   owner_id uuid primary key references auth.users(id) on delete cascade,
   gpt_key_cipher text,
   kie_key_cipher text,
+  efi_client_id_cipher text,
+  efi_client_secret_cipher text,
+  efi_certificate_p12_cipher text,
+  efi_certificate_password_cipher text,
+  efi_pix_key_cipher text,
+  efi_environment text not null default 'production' check (efi_environment in ('production', 'homologation')),
   updated_at timestamptz not null default now()
 );
 
