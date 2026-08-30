@@ -105,6 +105,25 @@ create table if not exists public.account_credentials (
   updated_at timestamptz not null default now()
 );
 
+-- Cobranças Pix dinâmicas da Efi. Cada txid é vinculada a uma única conta,
+-- conversa e etapa do fluxo antes do código copia e cola ser enviado.
+create table if not exists public.efi_pix_charges (
+  txid text primary key,
+  owner_id uuid not null references auth.users(id) on delete cascade,
+  lead_id uuid not null references public.leads(id) on delete cascade,
+  connection_id uuid not null references public.connections(id) on delete cascade,
+  flow_id uuid not null references public.flows(id) on delete cascade,
+  node_id text not null,
+  amount numeric(12,2),
+  status text not null default 'pending' check (status in ('pending','paid','expired','failed')),
+  payment_payload jsonb,
+  paid_at timestamptz,
+  expires_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists efi_pix_charges_pending_idx on public.efi_pix_charges(status, expires_at);
+
 alter table public.connections enable row level security;
 alter table public.leads enable row level security;
 alter table public.flows enable row level security;
@@ -112,6 +131,7 @@ alter table public.connection_flow_configs enable row level security;
 alter table public.flow_credentials enable row level security;
 alter table public.account_credentials enable row level security;
 alter table public.site_integrations enable row level security;
+alter table public.efi_pix_charges enable row level security;
 drop policy if exists "users access own connections" on public.connections;
 drop policy if exists "users access own leads" on public.leads;
 drop policy if exists "users access own flows" on public.flows;
@@ -119,6 +139,7 @@ drop policy if exists "users access own connection flow configs" on public.conne
 drop policy if exists "users access own flow credentials" on public.flow_credentials;
 drop policy if exists "users access own account credentials" on public.account_credentials;
 drop policy if exists "users access own site integration" on public.site_integrations;
+drop policy if exists "users access own efi pix charges" on public.efi_pix_charges;
 create policy "users access own connections" on public.connections for all using (auth.uid() = owner_id) with check (auth.uid() = owner_id);
 create policy "users access own leads" on public.leads for all using (auth.uid() = owner_id) with check (auth.uid() = owner_id);
 create policy "users access own flows" on public.flows for all using (auth.uid() = owner_id) with check (auth.uid() = owner_id);
@@ -126,6 +147,7 @@ create policy "users access own connection flow configs" on public.connection_fl
 create policy "users access own flow credentials" on public.flow_credentials for all using (auth.uid() = owner_id) with check (auth.uid() = owner_id);
 create policy "users access own account credentials" on public.account_credentials for all using (auth.uid() = owner_id) with check (auth.uid() = owner_id);
 create policy "users access own site integration" on public.site_integrations for all using (auth.uid() = owner_id) with check (auth.uid() = owner_id);
+create policy "users access own efi pix charges" on public.efi_pix_charges for select to authenticated using ((select auth.uid()) = owner_id);
 
 -- Modelos criados automaticamente para cada nova conta.
 create or replace function public.create_default_flows_for_user()

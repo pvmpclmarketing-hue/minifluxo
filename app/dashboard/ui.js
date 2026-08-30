@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { createBrowserClient } from '@supabase/ssr';
 import FlowCanvas from './flow-canvas';
 import ConnectionsPanel, { ConnectionCreationModal } from './connections-panel';
+import EfiWebhookButton from './efi-webhook-button';
 
 const labels={waiting_pix:'Aguardando Pix',waiting_briefing:'Aguardando briefing',waiting_response:'Aguardando resposta',generating:'Gerando musica',delivering:'Entregando música',delivery_failed:'Falha na entrega',timed_out:'Encerrado por tempo limite',completed:'Entregue',in_progress:'Em andamento'};
 const contactSources={inbound:'Chamou primeiro',manual:'Chamado por disparo',site:'Chamado pelo site',payment:'Chamado apos pagamento'};
@@ -66,7 +67,7 @@ export default function Dashboard({initialTab='dashboard',userEmail,initialLeads
       {tab==='contacts'&&<ContactsHistoryWithDelete leads={leads} remove={deleteContact}/>}
       {tab==='connections'&&<ConnectionsPanel items={connections} onConnectionsChange={setConnections}/>}
       {tab==='dispatches'&&<Dispatches connections={connections} flows={flows} configs={configs} save={saveConfig}/>}
-      {tab==='apis'&&<ApiSettings/>}
+      {tab==='apis'&&<><ApiSettings/><EfiWebhookButton/></>}
       {tab==='webhooks'&&<Webhooks origin={origin} connections={connections}/>}
     </main>
     {modal==='flow'&&<Modal title="Novo fluxo" close={()=>setModal('')} error={error}><form onSubmit={createFlow}><label>Nome do fluxo<input name="name" required/></label><label>Descricao<input name="description"/></label><button className="primary">Criar fluxo</button></form></Modal>}
