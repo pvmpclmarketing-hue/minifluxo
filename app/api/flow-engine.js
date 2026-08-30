@@ -38,6 +38,47 @@ async function credentialsFor(db,flowId,ownerId){let owner=ownerId;if(!owner){co
 function setAt(object,path,value){const keys=String(path||'ai.response').split('.');const result={...(object||{})};let cursor=result;keys.forEach((key,index)=>{if(index===keys.length-1)cursor[key]=value;else {cursor[key]={...(cursor[key]||{})};cursor=cursor[key];}});return result;}
 async function runAi(db,flow,lead,connection,node,variables){const config=node.data?.config||{};const key=(await credentialsFor(db,flow.id)).gpt||process.env.OPENAI_API_KEY;if(!key)throw new Error('Cadastre a chave GPT neste fluxo antes de usar o bloco de IA.');const context=lead.order_context||{};const history=Array.isArray(context.chat_history)?context.chat_history:[];const prompt=render(config.prompt||'Responda ao cliente de forma útil e objetiva.',variables);const messages=[{role:'system',content:prompt},{role:'user',content:`Dados do cliente: ${JSON.stringify({nome:lead.name,telefone:lead.phone,quiz:context.quiz||{},historia:context.story||''})}`},...history.slice(-8),{role:'user',content:context.last_message||'Inicie a conversa conforme sua instrução.'}];const response=await fetch('https://api.openai.com/v1/chat/completions',{method:'POST',headers:{Authorization:`Bearer ${key}`,'Content-Type':'application/json'},body:JSON.stringify({model:config.model||'gpt-4.1-mini',messages,temperature:0.7})});const raw=await response.text();let data={};try{data=JSON.parse(raw);}catch{}if(!response.ok)throw new Error(`GPT: ${response.status} ${data.error?.message||raw}`);const answer=data.choices?.[0]?.message?.content;if(!answer)throw new Error('GPT não retornou uma resposta.');const flowData=setAt(context.flow_data,config.saveTo||'ai.response',answer);const chatHistory=[...history,{role:'user',content:context.last_message||''},{role:'assistant',content:answer}].filter(item=>item.content);const orderContext={...context,flow_data:flowData,chat_history:chatHistory,flow_execution:null};const {data:updated,error}=await db.from('leads').update({order_context:orderContext,status:'in_progress',updated_at:new Date().toISOString()}).eq('id',lead.id).select().single();if(error)throw error;if(config.autoSend)await sendText(connection,lead.phone,answer);return {lead:updated,variables:variablesFor(updated)};}
 
+const MESSAGE_AGENT_PROMPT=`Você é um agente especialista em criar mensagens emocionais, naturais e personalizadas para acompanhar o envio de uma música feita especialmente para alguém.
+
+Você receberá nome da pessoa homenageada, história contada pelo cliente, relação entre quem envia e quem recebe e contexto da homenagem. Crie exatamente 3 mensagens diferentes.
+
+As mensagens acompanham uma música personalizada e devem preparar a pessoa para a surpresa. Cada uma deve parecer escrita pela própria pessoa que envia, ter ligação clara com fatos reais da história, demonstrar sentimento específico, avisar naturalmente que há uma surpresa e deixar claro que é uma música feita especialmente para a pessoa. Convide a pessoa a ouvir com atenção, sem contar toda a história antes da música.
+
+Escreva como WhatsApp real: íntimo, espontâneo, emocional, sem formalidade e sem frases genéricas. Cada mensagem deve ter 5 a 8 frases curtas e entre 60 e 120 palavras. Escolha só um ou dois elementos fortes da história. Respeite nome, relação, pronomes, ocasião e apelidos existentes; nunca invente fatos, apelidos ou sentimentos contraditórios.
+
+Mensagem 1 — EMOCIONAL: a mais sentimental, com construção emocional antes de revelar a música.
+Mensagem 2 — NATURAL: espontânea e cotidiana, como uma mensagem real antes de enviar um áudio.
+Mensagem 3 — SURPRESA: comece despertando curiosidade e revele a música ao longo do texto. A última frase deve incentivar o play.
+
+No máximo 2 emojis por mensagem, apenas se combinarem. Nunca mencione IA, tecnologia, prompt, algoritmo, plataforma, preço, compra ou processo de criação. Não transforme o texto em letra de música ou propaganda.
+
+Retorne somente neste formato exato:
+Mensagem 1:
+[texto]
+
+Mensagem 2:
+[texto]
+
+Mensagem 3:
+[texto]`;
+function parsePersonalizedMessages(answer){
+  const match=String(answer||'').match(/Mensagem\\s*1\s*:\s*([\\s\\S]*?)\\s*Mensagem\\s*2\s*:\s*([\\s\\S]*?)\\s*Mensagem\\s*3\s*:\s*([\\s\\S]*)$/i);
+  if(!match||match.slice(1).some(item=>!item.trim()))throw new Error('O agente não retornou as três mensagens no formato esperado.');
+  return {emocional:match[1].trim(),natural:match[2].trim(),surpresa:match[3].trim()};
+}
+async function runMessageAgent(db,flow,lead,node){
+  const config=node.data?.config||{};const key=(await credentialsFor(db,flow.id,flow.owner_id)).gpt||process.env.OPENAI_API_KEY;
+  if(!key)throw new Error('Cadastre a chave GPT neste fluxo antes de usar o Agente de mensagens.');
+  const context=lead.order_context||{};const quiz=context.quiz||{};
+  const leadContext={nome_homenageado:quiz.honoree||quiz.nome_homenageado||lead.name||'',historia:context.story||lead.music_request||'',relacao:quiz.relationship||quiz.relacao||context.relationship||context.relacao||quiz.recipient||'',contexto:quiz.occasion||quiz.ocasion||context.occasion||context.ocasion||'',genero_voz:quiz.voice_gender||quiz.vocal_gender||''};
+  const response=await fetch('https://api.openai.com/v1/chat/completions',{method:'POST',headers:{Authorization:`Bearer ${key}`,'Content-Type':'application/json'},body:JSON.stringify({model:config.model||'gpt-5-mini',messages:[{role:'system',content:MESSAGE_AGENT_PROMPT},{role:'user',content:`Dados reais do lead (use somente estes dados): ${JSON.stringify(leadContext)}`}],temperature:0.8})});
+  const raw=await response.text();let data={};try{data=JSON.parse(raw);}catch{}if(!response.ok)throw new Error(`GPT: ${response.status} ${data.error?.message||raw}`);
+  const answer=data.choices?.[0]?.message?.content;if(!answer)throw new Error('GPT não retornou as mensagens personalizadas.');
+  const messages=parsePersonalizedMessages(answer);const flowData=setAt(context.flow_data,config.saveTo||'mensagens_personalizadas',messages);
+  const {data:updated,error}=await db.from('leads').update({order_context:{...context,flow_data:flowData,flow_execution:null},status:'in_progress',updated_at:new Date().toISOString()}).eq('id',lead.id).eq('owner_id',lead.owner_id).eq('connection_id',lead.connection_id).select().single();
+  if(error)throw error;return {lead:updated,variables:variablesFor(updated)};
+}
+
 async function startKie(db,flow,lead,node,variables){
   const key=(await credentialsFor(db,flow.id)).kie;if(!key)throw new Error('Cadastre a chave Kie.ai neste fluxo antes de gerar música.');
   const config=node.data?.config||{};
@@ -75,6 +116,7 @@ export async function executeFlow({db,flow,lead,connection,resumeAfterId=null,au
     if(kind==='wait'){if(config.preMessage)await sendText(connection,currentLead.phone,render(config.preMessage,variables));const context={...(currentLead.order_context||{}),flow_execution:{flow_id:flow.id,wait_node_id:node.id}};await db.from('leads').update({status:'waiting_response',order_context:context,updated_at:new Date().toISOString()}).eq('id',currentLead.id);return {waiting:true};}
     if(kind==='delay'){const resumeAt=new Date(Date.now()+delayMilliseconds(config)).toISOString();const context={...(currentLead.order_context||{}),flow_execution:{flow_id:flow.id,delay_node_id:node.id,resume_at:resumeAt}};await db.from('leads').update({status:'waiting_delay',order_context:context,updated_at:new Date().toISOString()}).eq('id',currentLead.id);return {waiting:true,resume_at:resumeAt};}
     if(kind==='ai'){const result=await runAi(db,flow,currentLead,connection,node,variables);currentLead=result.lead;variables={...result.variables,kie:{...(result.variables.kie||{}),audios:readyAudios}};}
+    if(kind==='messageAgent'){const result=await runMessageAgent(db,flow,currentLead,node);currentLead=result.lead;variables={...result.variables,kie:{...(result.variables.kie||{}),audios:readyAudios}};}
     if(kind==='condition'){const matched=conditionMatches(config,variables);node=nextNode(nodes,edges,node.id,matched?'true':'false');if(!node)return {completed:false,reason:matched?'condition_true_path_missing':'condition_false_path_missing'};continue;}
     if(kind==='kie'){if(readyAudios.length){node=nextNode(nodes,edges,node.id);continue;}if(!variables.paid){await db.from('leads').update({status:'waiting_pix',updated_at:new Date().toISOString()}).eq('id',currentLead.id);return {waiting:true,reason:'payment_required'};}return startKie(db,flow,currentLead,node,variables);}
     if(kind==='deliver'||kind==='previewDeliver'){if(!readyAudios.length)return {completed:false,reason:kind==='previewDeliver'?'preview_audio_not_ready':'audio_not_ready'};const intro=render(config.intro||(kind==='previewDeliver'?'Sua música está pronta! Vou enviar as duas faixas da sua prévia em áudio.':'Sua música está pronta! Vou enviar as duas faixas em áudio.'),variables);currentLead=await deliverAudioTracks(db,currentLead,connection,readyAudios,intro);await db.from('leads').update({status:'completed',music_url:JSON.stringify(readyAudios.slice(0,2)),updated_at:new Date().toISOString()}).eq('id',currentLead.id).eq('owner_id',currentLead.owner_id).eq('connection_id',connection.id);return {completed:true,delivered:Math.min(2,readyAudios.length)};}
