@@ -21,6 +21,12 @@ async function saveDeliveryProgress(db,lead,connection,audios,progress,status='d
   const orderContext={...(lead.order_context||{}),delivery:{...(lead.order_context?.delivery||{}),audios,sent_indexes:progress.sent_indexes||[],intro_sent:!!progress.intro_sent}};
   const {data,error}=await db.from('leads').update({status,order_context:orderContext,updated_at:new Date().toISOString()}).eq('id',lead.id).eq('owner_id',lead.owner_id).eq('connection_id',connection.id).select().single();if(error)throw error;return data;
 }
+async function completeLead(db,lead,connection,extra={}){
+  const orderContext={...(lead.order_context||{}),flow_execution:null};
+  const {data,error}=await db.from('leads').update({status:'completed',order_context:orderContext,updated_at:new Date().toISOString(),...extra}).eq('id',lead.id).eq('owner_id',lead.owner_id).eq('connection_id',connection.id).select().single();
+  if(error)throw error;
+  return data;
+}
 const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 async function sendAudioConfirmed(connection,phone,audio,index,total){
   let lastError;for(let attempt=1;attempt<=3;attempt+=1){try{console.info('[music delivery] sending track',{track:index+1,attempt});const result=await sendAudio(connection,phone,audio,`Música ${index+1} de ${total}`);console.info('[music delivery] track accepted',{track:index+1,attempt});return result;}catch(error){lastError=error;console.error('[music delivery] track failed',{track:index+1,attempt,error:error?.message||String(error)});if(attempt<3)await wait(attempt*1500);}}throw lastError;
@@ -148,9 +154,27 @@ export async function executeFlow({db,flow,lead,connection,resumeAfterId=null,re
     if(kind==='paymentConfirmed'){if(!variables.paid){const context={...(currentLead.order_context||{}),flow_execution:{flow_id:flow.id,payment_node_id:node.id}};await db.from('leads').update({status:'waiting_payment',order_context:context,updated_at:new Date().toISOString()}).eq('id',currentLead.id).eq('owner_id',currentLead.owner_id).eq('connection_id',connection.id);return {waiting:true,reason:'payment_required'};}if(config.message){await sendText(connection,currentLead.phone,render(config.message,variables));}}
     if(kind==='condition'){const matched=conditionMatches(config,variables);node=nextNode(nodes,edges,node.id,matched?'true':'false');if(!node)return {completed:false,reason:matched?'condition_true_path_missing':'condition_false_path_missing'};continue;}
     if(kind==='kie'){if(readyAudios.length){node=nextNode(nodes,edges,node.id);continue;}if(!variables.paid){await db.from('leads').update({status:'waiting_pix',updated_at:new Date().toISOString()}).eq('id',currentLead.id);return {waiting:true,reason:'payment_required'};}return startKie(db,flow,currentLead,node,variables);}
-    if(kind==='deliver'||kind==='previewDeliver'){if(!readyAudios.length)return {completed:false,reason:kind==='previewDeliver'?'preview_audio_not_ready':'audio_not_ready'};const intro=render(config.intro||(kind==='previewDeliver'?'Sua música está pronta! Vou enviar as duas faixas da sua prévia em áudio.':'Sua música está pronta! Vou enviar as duas faixas em áudio.'),variables);currentLead=await deliverAudioTracks(db,currentLead,connection,readyAudios,intro);await db.from('leads').update({status:'completed',music_url:JSON.stringify(readyAudios.slice(0,2)),updated_at:new Date().toISOString()}).eq('id',currentLead.id).eq('owner_id',currentLead.owner_id).eq('connection_id',connection.id);return {completed:true,delivered:Math.min(2,readyAudios.length)};}
+    if(kind==='deliver'||kind==='previewDeliver'){
+      if(!readyAudios.length)return {completed:false,reason:kind==='previewDeliver'?'preview_audio_not_ready':'audio_not_ready'};
+      const intro=render(config.intro||(kind==='previewDeliver'?'Sua música está pronta! Vou enviar as duas faixas da sua prévia em áudio.':'Sua música está pronta! Vou enviar as duas faixas em áudio.'),variables);
+      currentLead=await deliverAudioTracks(db,currentLead,connection,readyAudios,intro);
+      const followingNode=nextNode(nodes,edges,node.id);
+      if(!followingNode){
+        await completeLead(db,currentLead,connection,{music_url:JSON.stringify(readyAudios.slice(0,2))});
+        return {completed:true,delivered:Math.min(2,readyAudios.length)};
+      }
+      const {data:updated,error}=await db.from('leads').update({status:'in_progress',music_url:JSON.stringify(readyAudios.slice(0,2)),order_context:{...(currentLead.order_context||{}),flow_execution:null},updated_at:new Date().toISOString()}).eq('id',currentLead.id).eq('owner_id',currentLead.owner_id).eq('connection_id',connection.id).select().single();
+      if(error)throw error;
+      currentLead=updated;
+      variables=variablesFor(currentLead,{audios:readyAudios});
+      node=followingNode;
+      continue;
+    }
     node=nextNode(nodes,edges,node.id);
-  }return {completed:true};
+  }
+  if(node)return {completed:false,reason:'flow_step_limit'};
+  await completeLead(db,currentLead,connection);
+  return {completed:true};
 }
 
 export async function retryKieDelivery({db,flow,lead,connection,assumeFirstTrackDelivered=false}){
