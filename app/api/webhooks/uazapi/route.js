@@ -21,7 +21,7 @@ export async function POST(request){
     console.info('[uazapi webhook]',{event,hasToken:Boolean(token),instanceName:instanceName||null,connectionMatched:Boolean(connection),hasPhone:Boolean(phone),hasName:Boolean(name),ownMessage,rootKeys:Object.keys(body).slice(0,12),dataKeys:Object.keys(body.data||{}).slice(0,12),chatKeys:Object.keys(body.chat||{}).slice(0,16),messageKeyKeys:Object.keys(body.message?.key||{}).slice(0,16)});
     if(!connection)return NextResponse.json({received:true,ignored:true});
     if(event==='connection'){const status=isConnected(body)?'connected':'disconnected';await db.from('connections').update({status}).eq('id',connection.id);return NextResponse.json({received:true,connection:status});}
-    if(event!=='messages'||ownMessage)return NextResponse.json({received:true,ignored:true});
+    if(!['messages','messages_update'].includes(event)||ownMessage)return NextResponse.json({received:true,ignored:true});
     const text=messageText(body);if(!phone)return NextResponse.json({received:true,ignored:true});
     const {data:config}=await db.from('connection_flow_configs').select('conversation_flow_id,owner_id').eq('connection_id',connection.id).maybeSingle();
     if(!config||config.owner_id!==connection.owner_id)return NextResponse.json({received:true,ignored:true});

@@ -1,12 +1,15 @@
 import { NextResponse } from 'next/server';
 import { adminClient, requireUser } from '../../../supabase';
-import { tokenForConnection, uazGet } from '../../../uazapi';
+import { configureGlobalUazWebhook, tokenForConnection, uazGet } from '../../../uazapi';
 
 export async function GET(_request,{params}) {
   try {
     const user=await requireUser();const {id}=await params;const db=adminClient();
     const {data:connection,error}=await db.from('connections').select('*').eq('id',id).eq('owner_id',user.id).single();
     if(error)throw error;if(connection.provider!=='uazapi')return NextResponse.json(connection);
+    // Mantém a configuração global no backend. Assim respostas de botões de
+    // instâncias já existentes continuam chegando mesmo após atualizações.
+    await configureGlobalUazWebhook();
     const remote=await uazGet(await tokenForConnection(db,connection),'/instance/status');
     const connected=Boolean(remote.status?.connected||remote.connected||remote.loggedIn);
     const status=connected?'connected':connection.status==='connected'?'disconnected':connection.status;
