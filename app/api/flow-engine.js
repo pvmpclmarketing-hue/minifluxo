@@ -88,9 +88,13 @@ Mensagem 2:
 Mensagem 3:
 [texto]`;
 function parsePersonalizedMessages(answer){
-  const match=String(answer||'').match(/Mensagem\\s*1\s*:\s*([\\s\\S]*?)\\s*Mensagem\\s*2\s*:\s*([\\s\\S]*?)\\s*Mensagem\\s*3\s*:\s*([\\s\\S]*)$/i);
-  if(!match||match.slice(1).some(item=>!item.trim()))throw new Error('O agente não retornou as três mensagens no formato esperado.');
-  return {emocional:match[1].trim(),natural:match[2].trim(),surpresa:match[3].trim()};
+  // GPT pode devolver os mesmos títulos em Markdown (por exemplo, **Mensagem
+  // 1 — Emocional:**). Aceitamos a apresentação, mas nunca seguimos sem as 3.
+  const clean=String(answer||'').replace(/\r/g,'').replace(/\*\*/g,'').replace(/__/g,'').replace(/^\s*#{1,6}\s*/gm,'');
+  const markers=[...clean.matchAll(/(?:^|\n)\s*Mensagem\s*([123])(?:\s*[-—–]\s*[^\n:]*)?\s*:?\s*/gi)];
+  const parts={};markers.forEach((marker,index)=>{const next=markers[index+1];parts[marker[1]]=clean.slice((marker.index||0)+marker[0].length,next?.index).trim();});
+  if(!parts[1]||!parts[2]||!parts[3])throw new Error('O agente não retornou as três mensagens no formato esperado.');
+  return {emocional:parts[1],natural:parts[2],surpresa:parts[3]};
 }
 async function runMessageAgent(db,flow,lead,connection,node){
   const config=node.data?.config||{};const key=(await credentialsFor(db,flow.id,flow.owner_id)).gpt||process.env.OPENAI_API_KEY;
