@@ -26,6 +26,15 @@ export async function sendMenu(connection,phone,text,choices){
   }
   return uazCall(await tokenForConnection(adminClient(),connection),'/send/menu',{number:phone,type:'button',text,choices:options.map(option=>`${option.label}|${option.id}`)});
 }
+export async function sendPixCopyButton(connection,phone,code,amount){
+  if(!connection)throw new Error('Conecte um WhatsApp antes de enviar o Pix.');
+  const text=`Seu Pix de R$ ${amount} está pronto. Toque em *Copiar código Pix* e cole no aplicativo do seu banco para pagar.`;
+  // A API oficial não expõe um botão nativo de cópia. Nela mantemos o código
+  // no texto para que o cliente ainda possa copiá-lo manualmente.
+  if(connection.provider==='meta')return sendText(connection,phone,`${text}\n\n${code}`);
+  // A UazAPI transforma copy: em ação nativa de copiar no WhatsApp.
+  return uazCall(await tokenForConnection(adminClient(),connection),'/send/menu',{number:phone,type:'button',text,choices:[`Copiar código Pix|copy:${code}`],footerText:'Pagamento seguro via Pix'});
+}
 export async function sendAudio(connection,phone,audioUrl,caption=''){
   if(!connection)throw new Error('Conecte um WhatsApp antes de enviar o áudio.');
   if(connection.provider==='meta'){const response=await fetch(`https://graph.facebook.com/${process.env.META_API_VERSION||'v22.0'}/${process.env.META_PHONE_NUMBER_ID}/messages`,{method:'POST',headers:{Authorization:`Bearer ${process.env.META_ACCESS_TOKEN}`,'Content-Type':'application/json'},body:JSON.stringify({messaging_product:'whatsapp',to:phone,type:'audio',audio:{link:audioUrl}})});if(!response.ok)throw new Error(`Meta: ${response.status} ${await response.text()}`);return response.json();}
