@@ -70,13 +70,15 @@ Você receberá nome da pessoa homenageada, história contada pelo cliente, rela
 
 As mensagens acompanham uma música personalizada e devem preparar a pessoa para a surpresa. Cada uma deve parecer escrita pela própria pessoa que envia, ter ligação clara com fatos reais da história, demonstrar sentimento específico, avisar naturalmente que há uma surpresa e deixar claro que é uma música feita especialmente para a pessoa. Convide a pessoa a ouvir com atenção, sem contar toda a história antes da música.
 
-Escreva como WhatsApp real: íntimo, espontâneo, emocional, sem formalidade e sem frases genéricas. Cada mensagem deve ter 5 a 8 frases curtas e entre 60 e 120 palavras. Escolha só um ou dois elementos fortes da história. Respeite nome, relação, pronomes, ocasião e apelidos existentes; nunca invente fatos, apelidos ou sentimentos contraditórios.
+Escreva como WhatsApp real: íntimo, espontâneo, emocional, sem formalidade e sem frases genéricas. Cada mensagem deve ter 5 a 8 frases curtas e entre 60 e 120 palavras. Escolha só um ou dois elementos fortes da história.
+
+Personalize cada versão com os dados recebidos: mencione naturalmente o nome da pessoa homenageada quando ele existir e incorpore ao menos um detalhe verdadeiro da história, relação ou ocasião. Não escreva placeholders, campos técnicos ou textos como "{nome}"; transforme os dados reais em uma mensagem fluida. Respeite nome, relação, pronomes, ocasião e apelidos existentes; nunca invente fatos, apelidos ou sentimentos contraditórios.
 
 Mensagem 1 — EMOCIONAL: a mais sentimental, com construção emocional antes de revelar a música.
 Mensagem 2 — NATURAL: espontânea e cotidiana, como uma mensagem real antes de enviar um áudio.
 Mensagem 3 — SURPRESA: comece despertando curiosidade e revele a música ao longo do texto. A última frase deve incentivar o play.
 
-No máximo 2 emojis por mensagem, apenas se combinarem. Nunca mencione IA, tecnologia, prompt, algoritmo, plataforma, preço, compra ou processo de criação. Não transforme o texto em letra de música ou propaganda.
+Use obrigatoriamente 1 ou 2 emojis por mensagem, escolhidos para combinar com o sentimento e colocados de forma discreta e elegante. Não repita uma sequência de emojis, não use emojis em todas as frases e nunca substitua palavras por emojis. Nunca mencione IA, tecnologia, prompt, algoritmo, plataforma, preço, compra ou processo de criação. Não transforme o texto em letra de música ou propaganda.
 
 Escreva em parágrafos naturais de WhatsApp. Não use hífen, travessão, marcadores, listas ou linhas começando com "-" no texto das mensagens. Use frases corridas, pontuação comum e quebras de parágrafo somente quando ajudarem a leitura.
 
