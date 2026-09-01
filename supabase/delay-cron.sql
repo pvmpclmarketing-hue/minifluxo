@@ -1,5 +1,13 @@
--- Execute uma unica vez no SQL Editor do Supabase depois de criar DELAY_CRON_SECRET na Vercel.
--- Troque os dois valores entre <...>. Use um segredo longo e igual nos dois lugares.
+-- Referência do agendador de delays do WhatsEntregavel.
+-- A configuração de produção foi instalada em 01/09/2026:
+--   - extensões pg_cron e pg_net ativas;
+--   - segredo armazenado somente no Supabase Vault e na Vercel;
+--   - job whatsentregavel-flow-delays executando a cada minuto.
+--
+-- Não substitua <SEGREDO_DO_DELAY_CRON> por uma chave real neste arquivo e não
+-- faça commit de segredos. Para reinstalar, gere um novo segredo, salve-o como
+-- DELAY_CRON_SECRET na Vercel e grave o mesmo valor no Vault antes de executar
+-- o agendamento abaixo.
 create extension if not exists pg_cron;
 create extension if not exists pg_net;
 
