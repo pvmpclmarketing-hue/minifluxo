@@ -113,9 +113,11 @@ async function runMessageAgent(db,flow,lead,connection,node){
   if(error)throw error;
   const intro=render(config.intro||'Aqui estão as 3 versões das suas mensagens. Escolha a que mais combina com você e copie para enviar junto da música:',variablesFor(updated));
   if(intro)await sendText(connection,updated.phone,intro);
-  await sendText(connection,updated.phone,`Mensagem 1 — Emocional\n\n${messages.emocional}`);
-  await sendText(connection,updated.phone,`Mensagem 2 — Natural\n\n${messages.natural}`);
-  await sendText(connection,updated.phone,`Mensagem 3 — Surpresa\n\n${messages.surpresa}`);
+  // Cada versão chega isolada, pronta para o cliente copiar, sem um título
+  // que interfira no texto que ele deseja encaminhar.
+  await sendText(connection,updated.phone,messages.emocional);
+  await sendText(connection,updated.phone,messages.natural);
+  await sendText(connection,updated.phone,messages.surpresa);
   return {lead:updated,variables:variablesFor(updated)};
 }
 
