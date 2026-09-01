@@ -78,6 +78,8 @@ Mensagem 3 — SURPRESA: comece despertando curiosidade e revele a música ao lo
 
 No máximo 2 emojis por mensagem, apenas se combinarem. Nunca mencione IA, tecnologia, prompt, algoritmo, plataforma, preço, compra ou processo de criação. Não transforme o texto em letra de música ou propaganda.
 
+Escreva em parágrafos naturais de WhatsApp. Não use hífen, travessão, marcadores, listas ou linhas começando com "-" no texto das mensagens. Use frases corridas, pontuação comum e quebras de parágrafo somente quando ajudarem a leitura.
+
 Retorne somente neste formato exato:
 Mensagem 1:
 [texto]
