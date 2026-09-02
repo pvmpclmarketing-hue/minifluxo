@@ -193,6 +193,7 @@ async function latestKieAudios(db,flow,lead){
   const key=(await credentialsFor(db,flow.id,flow.owner_id)).kie;if(!key)throw new Error('A chave Kie.ai desta conta não está configurada.');
   const response=await fetch(`${String(process.env.KIE_API_BASE_URL||'https://api.kie.ai').replace(/\/$/,'')}/api/v1/generate/record-info?taskId=${encodeURIComponent(lead.kie_task_id||'')}`,{headers:{Authorization:`Bearer ${key}`}});
   const payload=await response.json().catch(()=>({}));if(!response.ok)throw new Error(`Kie.ai: ${response.status} ${payload.msg||'Não foi possível consultar a música.'}`);
+  console.info('[kie recovery] provider status',{task_id:lead.kie_task_id,api_code:payload.code??null,status:payload.data?.status||payload.data?.taskStatus||payload.data?.response?.status||payload.status||null,message:payload.msg||payload.message||null});
   return audioUrls(payload.data?.response?.sunoData||payload).slice(0,2);
 }
 
