@@ -189,13 +189,32 @@ export async function executeFlow({db,flow,lead,connection,resumeAfterId=null,re
   return {completed:true};
 }
 
-export async function retryKieDelivery({db,flow,lead,connection,assumeFirstTrackDelivered=false}){
-  assertExecutionScope(flow,lead,connection);
-  if(lead.status!=='delivery_failed')throw new Error('Somente entregas que falharam podem ser reenviadas.');
+async function latestKieAudios(db,flow,lead){
   const key=(await credentialsFor(db,flow.id,flow.owner_id)).kie;if(!key)throw new Error('A chave Kie.ai desta conta não está configurada.');
   const response=await fetch(`${String(process.env.KIE_API_BASE_URL||'https://api.kie.ai').replace(/\/$/,'')}/api/v1/generate/record-info?taskId=${encodeURIComponent(lead.kie_task_id||'')}`,{headers:{Authorization:`Bearer ${key}`}});
   const payload=await response.json().catch(()=>({}));if(!response.ok)throw new Error(`Kie.ai: ${response.status} ${payload.msg||'Não foi possível consultar a música.'}`);
-  const audios=audioUrls(payload.data?.response?.sunoData||payload).slice(0,2);if(audios.length<2)throw new Error('A Kie.ai ainda não disponibilizou as duas faixas para reenvio.');
+  return audioUrls(payload.data?.response?.sunoData||payload).slice(0,2);
+}
+
+export async function recoverKieGeneration({db,lead}){
+  if(lead.status!=='generating')return {waiting:true,reason:'not_generating'};
+  const execution=lead.order_context?.flow_execution;
+  if(!execution?.flow_id||!execution.kie_node_id)return {waiting:true,reason:'invalid_execution'};
+  const [{data:flow},{data:connection}]=await Promise.all([
+    db.from('flows').select('*').eq('id',execution.flow_id).eq('owner_id',lead.owner_id).eq('status','active').maybeSingle(),
+    db.from('connections').select('*').eq('id',lead.connection_id).eq('owner_id',lead.owner_id).eq('status','connected').maybeSingle()
+  ]);
+  if(!flow||!connection)return {waiting:true,reason:'flow_or_connection_unavailable'};
+  const audios=await latestKieAudios(db,flow,lead);if(audios.length<2)return {waiting:true,reason:'kie_not_ready'};
+  const {data:claimed,error}=await db.from('leads').update({status:'delivering',order_context:{...(lead.order_context||{}),kie_audios:audios},updated_at:new Date().toISOString()}).eq('id',lead.id).eq('owner_id',lead.owner_id).eq('connection_id',connection.id).eq('status','generating').select().maybeSingle();if(error)throw error;if(!claimed)return {waiting:true,reason:'already_claimed'};
+  try{return await executeFlow({db,flow,lead:claimed,connection,resumeAfterId:execution.kie_node_id,audios});}
+  catch(error){await db.from('leads').update({status:'delivery_failed',updated_at:new Date().toISOString()}).eq('id',claimed.id).eq('owner_id',claimed.owner_id).eq('connection_id',connection.id).eq('status','delivering');throw error;}
+}
+
+export async function retryKieDelivery({db,flow,lead,connection,assumeFirstTrackDelivered=false}){
+  assertExecutionScope(flow,lead,connection);
+  if(lead.status!=='delivery_failed')throw new Error('Somente entregas que falharam podem ser reenviadas.');
+  const audios=await latestKieAudios(db,flow,lead);if(audios.length<2)throw new Error('A Kie.ai ainda não disponibilizou as duas faixas para reenvio.');
   const savedIndexes=Array.isArray(lead.order_context?.delivery?.sent_indexes)?lead.order_context.delivery.sent_indexes:[];const context={...(lead.order_context||{}),kie_audios:audios,delivery:{...(lead.order_context?.delivery||{}),audios,sent_indexes:savedIndexes.length||!assumeFirstTrackDelivered?savedIndexes:[0],intro_sent:lead.order_context?.delivery?.intro_sent||assumeFirstTrackDelivered}};const {data:claimed,error}=await db.from('leads').update({status:'delivering',order_context:context,updated_at:new Date().toISOString()}).eq('id',lead.id).eq('owner_id',lead.owner_id).eq('connection_id',connection.id).eq('status','delivery_failed').select().single();if(error)throw error;
   try{return await executeFlow({db,flow,lead:claimed,connection,resumeAfterId:context.flow_execution?.kie_node_id,audios});}
   catch(error){await db.from('leads').update({status:'delivery_failed',updated_at:new Date().toISOString()}).eq('id',claimed.id).eq('owner_id',claimed.owner_id).eq('connection_id',connection.id).eq('status','delivering');throw error;}
