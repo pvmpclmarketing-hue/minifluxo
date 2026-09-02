@@ -205,7 +205,9 @@ export async function recoverKieGeneration({db,lead}){
     db.from('connections').select('*').eq('id',lead.connection_id).eq('owner_id',lead.owner_id).eq('status','connected').maybeSingle()
   ]);
   if(!flow||!connection)return {waiting:true,reason:'flow_or_connection_unavailable'};
-  const audios=await latestKieAudios(db,flow,lead);if(audios.length<2)return {waiting:true,reason:'kie_not_ready'};
+  const audios=await latestKieAudios(db,flow,lead);
+  console.info('[kie recovery] task checked',{lead_id:lead.id,task_id:lead.kie_task_id,audio_count:audios.length});
+  if(audios.length<2)return {waiting:true,reason:'kie_not_ready'};
   const {data:claimed,error}=await db.from('leads').update({status:'delivering',order_context:{...(lead.order_context||{}),kie_audios:audios},updated_at:new Date().toISOString()}).eq('id',lead.id).eq('owner_id',lead.owner_id).eq('connection_id',connection.id).eq('status','generating').select().maybeSingle();if(error)throw error;if(!claimed)return {waiting:true,reason:'already_claimed'};
   try{return await executeFlow({db,flow,lead:claimed,connection,resumeAfterId:execution.kie_node_id,audios});}
   catch(error){await db.from('leads').update({status:'delivery_failed',updated_at:new Date().toISOString()}).eq('id',claimed.id).eq('owner_id',claimed.owner_id).eq('connection_id',connection.id).eq('status','delivering');throw error;}
