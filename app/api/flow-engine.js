@@ -189,12 +189,16 @@ export async function executeFlow({db,flow,lead,connection,resumeAfterId=null,re
   return {completed:true};
 }
 
-async function latestKieAudios(db,flow,lead){
+async function latestKieTask(db,flow,lead){
   const key=(await credentialsFor(db,flow.id,flow.owner_id)).kie;if(!key)throw new Error('A chave Kie.ai desta conta não está configurada.');
   const response=await fetch(`${String(process.env.KIE_API_BASE_URL||'https://api.kie.ai').replace(/\/$/,'')}/api/v1/generate/record-info?taskId=${encodeURIComponent(lead.kie_task_id||'')}`,{headers:{Authorization:`Bearer ${key}`}});
   const payload=await response.json().catch(()=>({}));if(!response.ok)throw new Error(`Kie.ai: ${response.status} ${payload.msg||'Não foi possível consultar a música.'}`);
-  console.info('[kie recovery] provider status',{task_id:lead.kie_task_id,api_code:payload.code??null,status:payload.data?.status||payload.data?.taskStatus||payload.data?.response?.status||payload.status||null,message:payload.msg||payload.message||null});
-  return audioUrls(payload.data?.response?.sunoData||payload).slice(0,2);
+  const status=payload.data?.status||payload.data?.taskStatus||payload.data?.response?.status||payload.status||null;
+  console.info('[kie recovery] provider status',{task_id:lead.kie_task_id,api_code:payload.code??null,status,message:payload.msg||payload.message||null});
+  return {status:String(status||''),audios:audioUrls(payload.data?.response?.sunoData||payload).slice(0,2)};
+}
+async function latestKieAudios(db,flow,lead){
+  return (await latestKieTask(db,flow,lead)).audios;
 }
 
 export async function recoverKieGeneration({db,lead}){
@@ -206,9 +210,20 @@ export async function recoverKieGeneration({db,lead}){
     db.from('connections').select('*').eq('id',lead.connection_id).eq('owner_id',lead.owner_id).eq('status','connected').maybeSingle()
   ]);
   if(!flow||!connection)return {waiting:true,reason:'flow_or_connection_unavailable'};
-  const audios=await latestKieAudios(db,flow,lead);
+  const task=await latestKieTask(db,flow,lead);const audios=task.audios;
   console.info('[kie recovery] task checked',{lead_id:lead.id,task_id:lead.kie_task_id,audio_count:audios.length});
-  if(audios.length<2)return {waiting:true,reason:'kie_not_ready'};
+  if(audios.length<2){
+    const recovery=lead.order_context?.kie_recovery||{};
+    if(task.status==='GENERATE_AUDIO_FAILED'&&Number(recovery.restart_attempts||0)<1){
+      const node=(Array.isArray(flow.nodes)?flow.nodes:[]).find(item=>item.id===execution.kie_node_id&&item.data?.kind==='kie');
+      if(!node)return {waiting:true,reason:'kie_node_missing'};
+      const restartedLead={...lead,order_context:{...(lead.order_context||{}),kie_recovery:{...recovery,restart_attempts:Number(recovery.restart_attempts||0)+1,restarted_at:new Date().toISOString(),previous_task_id:lead.kie_task_id}}};
+      const restarted=await startKie(db,flow,restartedLead,node,variablesFor(restartedLead));
+      console.info('[kie recovery] generation restarted',{lead_id:lead.id,previous_task_id:lead.kie_task_id,new_task_id:restarted.taskId});
+      return {waiting:true,restarted:true,taskId:restarted.taskId};
+    }
+    return {waiting:true,reason:'kie_not_ready'};
+  }
   const {data:claimed,error}=await db.from('leads').update({status:'delivering',order_context:{...(lead.order_context||{}),kie_audios:audios},updated_at:new Date().toISOString()}).eq('id',lead.id).eq('owner_id',lead.owner_id).eq('connection_id',connection.id).eq('status','generating').select().maybeSingle();if(error)throw error;if(!claimed)return {waiting:true,reason:'already_claimed'};
   try{return await executeFlow({db,flow,lead:claimed,connection,resumeAfterId:execution.kie_node_id,audios});}
   catch(error){await db.from('leads').update({status:'delivery_failed',updated_at:new Date().toISOString()}).eq('id',claimed.id).eq('owner_id',claimed.owner_id).eq('connection_id',connection.id).eq('status','delivering');throw error;}
