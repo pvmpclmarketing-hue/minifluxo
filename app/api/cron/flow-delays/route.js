@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { adminClient } from '../../supabase';
-import { executeFlow, recoverKieGeneration } from '../../flow-engine';
+import { executeFlow, recoverKieGeneration, retryKieDelivery } from '../../flow-engine';
 
 export async function POST(request) {
   if (!process.env.DELAY_CRON_SECRET || request.headers.get('authorization') !== `Bearer ${process.env.DELAY_CRON_SECRET}`) return new NextResponse(null, { status: 401 });
@@ -49,5 +49,28 @@ export async function POST(request) {
       console.error('[kie recovery] failed', { leadId: item.id, error: recoverError.message });
     }
   }
-  return NextResponse.json({ received: true, resumed, kie_recovered: recoveredKie, timed_out: stopped, timeout_hours: timeoutHours });
+  // Uma URL temporária de áudio também pode expirar durante o envio. Tentamos
+  // recuperar cada entrega falha uma única vez, respeitando as faixas já enviadas.
+  let recoveredDelivery = 0;
+  const { data: failedDeliveries, error: failedError } = await db.from('leads').select('*').eq('status', 'delivery_failed').limit(25);
+  if (failedError) return NextResponse.json({ error: failedError.message }, { status: 500 });
+  for (const item of failedDeliveries || []) {
+    const recovery = item.order_context?.delivery_recovery || {};
+    if (Number(recovery.retry_attempts || 0) >= 1) continue;
+    const execution = item.order_context?.flow_execution;
+    try {
+      const [{ data: flow }, { data: connection }] = await Promise.all([
+        db.from('flows').select('*').eq('id', execution?.flow_id).eq('owner_id', item.owner_id).eq('status', 'active').maybeSingle(),
+        db.from('connections').select('*').eq('id', item.connection_id).eq('owner_id', item.owner_id).eq('status', 'connected').maybeSingle()
+      ]);
+      if (!flow || !connection) continue;
+      const { data: claimed } = await db.from('leads').update({ order_context: { ...(item.order_context || {}), delivery_recovery: { ...recovery, retry_attempts: Number(recovery.retry_attempts || 0) + 1, retried_at: new Date().toISOString() } }, updated_at: new Date().toISOString() }).eq('id', item.id).eq('owner_id', item.owner_id).eq('connection_id', connection.id).eq('status', 'delivery_failed').select().maybeSingle();
+      if (!claimed) continue;
+      await retryKieDelivery({ db, flow, lead: claimed, connection });
+      recoveredDelivery += 1;
+    } catch (deliveryError) {
+      console.error('[kie delivery recovery] failed', { leadId: item.id, error: deliveryError.message });
+    }
+  }
+  return NextResponse.json({ received: true, resumed, kie_recovered: recoveredKie, delivery_recovered: recoveredDelivery, timed_out: stopped, timeout_hours: timeoutHours });
 }
