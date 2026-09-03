@@ -55,7 +55,13 @@ export async function POST(request) {
       let sitePayment = null;
       try { sitePayment = await notifySitePayment(paidLead, claimed, payment); }
       catch (error) { console.error('[efi webhook] site payment status failed', { txid, error: error?.message || String(error) }); }
-      const result = await executeFlow({ db, flow, lead: paidLead, connection, resumeAfterId: claimed.node_id });
+      // Cobranças criadas pelo endpoint do site Efí carregam este marcador. Elas
+      // devem iniciar o fluxo configurado em Disparos desde a entrada, exatamente
+      // como um PAYMENT_APPROVED do Asaas. As cobranças antigas preservam o
+      // comportamento de continuar após o card Pagamento confirmado.
+      const startsPaymentFlow = claimed.payment_payload?.dispatch_like_asaas === true;
+      const audios = Array.isArray(paidLead.order_context?.preview_audios) ? paidLead.order_context.preview_audios : [];
+      const result = await executeFlow({ db, flow, lead: paidLead, connection, audios, resumeAfterId: startsPaymentFlow ? null : claimed.node_id });
       processed.push({ txid, ok: true, site_payment: sitePayment, result });
     } catch (error) {
       console.error('[efi webhook] flow failed', { txid, lead_id: paidLead.id, error: error?.message || String(error) });

@@ -7,6 +7,21 @@ export const runtime = 'nodejs';
 
 function cleanPhone(value) { return String(value || '').replace(/\D/g, ''); }
 function efiError(prefix, response) { return new Error(`${prefix}: ${response.data?.mensagem || response.data?.message || response.raw || response.status}`); }
+function urlsFrom(value, result = new Set()) {
+  if (!value) return result;
+  if (Array.isArray(value)) { value.forEach((item) => urlsFrom(item, result)); return result; }
+  if (typeof value === 'string') { value.split(/[\s,]+/).filter((item) => /^https?:\/\//i.test(item)).forEach((item) => result.add(item)); return result; }
+  if (typeof value === 'object') Object.values(value).forEach((item) => urlsFrom(item, result));
+  return result;
+}
+function previewAudios(body) {
+  return [...urlsFrom([
+    body.preview_audios, body.previewAudios, body.preview_audio_urls, body.previewAudioUrls,
+    body.preview?.audios, body.preview?.audio_urls, body.preview?.audioUrls,
+    body.quiz?.preview_audio_urls, body.quiz?.previewAudios,
+  ])].slice(0, 2);
+}
+function fulfillmentMode(body) { return body.fulfillment?.mode || body.quiz?.fulfillment_mode || 'generate_music_in_miniflux'; }
 
 async function resolveConnection(db, integrationKey) {
   const { data: integration } = await db.from('site_integrations').select('connection_id').eq('integration_key', integrationKey).maybeSingle();
@@ -34,14 +49,22 @@ export async function POST(request) {
     const connection = await resolveConnection(db, body.integration_key);
     if (!connection) return NextResponse.json({ error: 'Informe uma integration_key válida.' }, { status: 400 });
     if (connection.status !== 'connected') return NextResponse.json({ error: 'O WhatsApp desta integração não está conectado.' }, { status: 409 });
-    const { data: config } = await db.from('connection_flow_configs').select('site_flow_id,owner_id').eq('connection_id', connection.id).maybeSingle();
+    const mode = fulfillmentMode(body);
+    if (!['deliver_existing_preview_audio', 'generate_music_in_miniflux'].includes(mode)) return NextResponse.json({ error: 'fulfillment.mode deve ser deliver_existing_preview_audio ou generate_music_in_miniflux.' }, { status: 400 });
+    const audios = previewAudios(body);
+    if (mode === 'deliver_existing_preview_audio' && audios.length !== 2) return NextResponse.json({ error: 'A entrega da prévia exige exatamente duas URLs em preview.audios.' }, { status: 422 });
+    const { data: config } = await db.from('connection_flow_configs').select('site_flow_id,payment_preview_flow_id,payment_generation_flow_id,owner_id').eq('connection_id', connection.id).maybeSingle();
     if (!config?.site_flow_id || config.owner_id !== connection.owner_id) return NextResponse.json({ error: 'Configure o fluxo de pedido vindo do site para esta conexão.' }, { status: 409 });
     const { data: flow } = await db.from('flows').select('*').eq('id', config.site_flow_id).eq('owner_id', config.owner_id).maybeSingle();
     if (!flow || flow.status !== 'active') return NextResponse.json({ error: 'O fluxo de pedido vindo do site precisa estar ativo.' }, { status: 409 });
+    const paymentFlowId = mode === 'deliver_existing_preview_audio' ? config.payment_preview_flow_id : config.payment_generation_flow_id;
+    if (!paymentFlowId) return NextResponse.json({ error: mode === 'deliver_existing_preview_audio' ? 'Configure o fluxo de pagamento com prévia pronta em Disparos.' : 'Configure o fluxo de pagamento sem prévia pronta em Disparos.' }, { status: 409 });
+    const { data: paymentFlow } = await db.from('flows').select('*').eq('id', paymentFlowId).eq('owner_id', config.owner_id).maybeSingle();
+    if (!paymentFlow || paymentFlow.status !== 'active') return NextResponse.json({ error: 'O fluxo de pagamento selecionado precisa estar ativo.' }, { status: 409 });
 
     let { data: lead } = await db.from('leads').select('*').eq('owner_id', flow.owner_id).eq('external_order_id', orderId).maybeSingle();
     if (!lead) {
-      const { data, error } = await db.from('leads').insert({ owner_id: flow.owner_id, name: String(body.name).trim(), phone, source: 'site', provider: connection.provider, connection_id: connection.id, external_order_id: orderId, music_request: body.lyric_text || body.story || null, status: 'in_progress', order_context: { quiz: body.quiz || {}, story: body.story || '', lyricText: body.lyric_text || '', paid: false, sourceOrderId: orderId, payment_provider: 'efi' } }).select().single();
+      const { data, error } = await db.from('leads').insert({ owner_id: flow.owner_id, name: String(body.name).trim(), phone, source: 'site', provider: connection.provider, connection_id: connection.id, external_order_id: orderId, music_request: body.lyric_text || body.story || null, status: 'in_progress', order_context: { quiz: body.quiz || {}, story: body.story || '', lyricText: body.lyric_text || body.lyricText || '', paid: false, sourceOrderId: orderId, payment_provider: 'efi', fulfillment_mode: mode, preview_audios: audios, preview_task_id: body.preview?.task_id || body.preview?.taskId || body.kie_task_id || null } }).select().single();
       if (error) throw error;
       lead = data;
       await executeFlow({ db, flow, lead, connection });
@@ -66,7 +89,10 @@ export async function POST(request) {
     }
     if (!qrCode) throw new Error('A Efí criou a cobrança, mas não retornou a imagem do QR Code. Tente gerar novamente.');
     const expiresAt = new Date(Date.now() + expiration * 1000).toISOString();
-    const { error: chargeError } = await db.from('efi_pix_charges').upsert({ txid, owner_id: flow.owner_id, lead_id: lead.id, connection_id: connection.id, flow_id: flow.id, node_id: paymentNodeId, amount: (amountCents / 100).toFixed(2), status: 'pending', expires_at: expiresAt, updated_at: new Date().toISOString(), payment_payload: { pix_copia_e_cola: charge.data.pixCopiaECola, qr_code: qrCode, source_order_id: orderId } }, { onConflict: 'txid' });
+    // O fluxo `site_flow_id` só prepara o pedido e espera no card Pagamento
+    // confirmado. Após a Efí aprovar, o fluxo abaixo é iniciado pela entrada,
+    // igual ao webhook de pagamento do Asaas.
+    const { error: chargeError } = await db.from('efi_pix_charges').upsert({ txid, owner_id: flow.owner_id, lead_id: lead.id, connection_id: connection.id, flow_id: paymentFlow.id, node_id: paymentNodeId, amount: (amountCents / 100).toFixed(2), status: 'pending', expires_at: expiresAt, updated_at: new Date().toISOString(), payment_payload: { pix_copia_e_cola: charge.data.pixCopiaECola, qr_code: qrCode, source_order_id: orderId, dispatch_like_asaas: true, fulfillment_mode: mode, pre_payment_flow_id: flow.id, preview_audios: audios } }, { onConflict: 'txid' });
     if (chargeError) throw chargeError;
     return NextResponse.json({ order_id: orderId, txid, pixPayload: charge.data.pixCopiaECola, qrCode, expiresAt });
   } catch (error) {

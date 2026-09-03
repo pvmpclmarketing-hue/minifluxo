@@ -9,7 +9,7 @@ Documento de integração da rota `https://musica.memberproduto.shop/tiktok` com
 Na versão TikTok, a tela continua com a mesma experiência de Pix do site, mas a cobrança não é criada pela Asaas. O site pede a cobrança ao Minifluxo; o Minifluxo usa as credenciais Efí da conta, devolve QR Code e Pix copia e cola, e recebe a confirmação de pagamento pela Efí. Ao confirmar, ele:
 
 1. marca o pedido correspondente como pago no Supabase do site;
-2. dispara o fluxo de WhatsApp exatamente a partir do card posterior a **Pagamento confirmado**;
+2. dispara, a partir da entrada, o mesmo fluxo selecionado em **Disparos** para pagamento aprovado pelo Asaas: prévia pronta ou geração no Minifluxo;
 3. não processa uma segunda vez se a Efí reenviar a notificação.
 
 As demais versões e rotas que usam Asaas não são alteradas.
@@ -62,16 +62,18 @@ Pedido marcado como pago no site
 
 ### 2. Fluxo no canvas
 
-Use obrigatoriamente o card **Pagamento confirmado** depois da etapa que prepara o pedido e antes de Kie, entrega ou mensagem final.
+Use obrigatoriamente o card **Pagamento confirmado** no fluxo de preparação do pedido vindo do site. Depois da aprovação, o Minifluxo inicia o fluxo de pagamento escolhido em **Disparos**, exatamente como no Asaas.
 
 ```text
-Pedido vindo do site
+Fluxo de pedido vindo do site
   -> informações/opções do pedido
   -> Pagamento confirmado
-  -> geração, envio pelo WhatsApp ou entrega aplicável
+
+Pix Efí aprovado
+  -> fluxo de pagamento com prévia pronta OU fluxo de geração no Minifluxo
 ```
 
-O endpoint Efí identifica esse card e salva seu `node_id`. Quando o pagamento chega, o fluxo é retomado somente depois dele. Não substitua esse card por Delay.
+O endpoint Efí identifica esse card para vincular o pedido à cobrança. Quando o pagamento chega, ele escolhe o fluxo de pagamento pela modalidade recebida do site e o inicia desde o começo. Não substitua esse card por Delay.
 
 ### 3. Credenciais Efí por conta
 
@@ -185,7 +187,7 @@ O payload Efí pode conter `pix: []` ou um pagamento individual com `txid`. Para
 2. registra data e payload do pagamento;
 3. marca o contexto do lead com `paid: true`;
 4. chama o Supabase do site;
-5. continua o canvas depois do card de pagamento.
+5. inicia o fluxo de pagamento configurado em **Disparos**, como ocorre no Asaas.
 
 O callback ao site é:
 
