@@ -18,6 +18,16 @@ function paymentsFrom(payload) {
   return [];
 }
 
+async function notifySitePayment(lead, charge, payment) {
+  const url = String(process.env.EFI_SITE_PAYMENT_WEBHOOK_URL || '').replace(/\/$/, '');
+  const secret = String(process.env.EFI_SITE_PAYMENT_WEBHOOK_SECRET || '');
+  const orderId = lead?.order_context?.sourceOrderId;
+  if (!url || !secret || !orderId) return { skipped: true };
+  const response = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', 'x-efi-site-secret': secret }, body: JSON.stringify({ order_id: orderId, txid: charge.txid, payment }) });
+  if (!response.ok) throw new Error(`Site de música respondeu ${response.status} ao confirmar o Pix Efí.`);
+  return { delivered: true };
+}
+
 export async function POST(request) {
   if (!secretMatches(request.headers.get('x-efi-relay-secret'))) return new NextResponse(null, { status: 401 });
   let payload;
@@ -42,8 +52,11 @@ export async function POST(request) {
     const { data: paidLead, error: leadError } = await db.from('leads').update({ status: 'in_progress', order_context: context, updated_at: now }).eq('id', lead.id).eq('owner_id', claimed.owner_id).eq('connection_id', claimed.connection_id).select().single();
     if (leadError) { processed.push({ txid, error: leadError.message }); continue; }
     try {
+      let sitePayment = null;
+      try { sitePayment = await notifySitePayment(paidLead, claimed, payment); }
+      catch (error) { console.error('[efi webhook] site payment status failed', { txid, error: error?.message || String(error) }); }
       const result = await executeFlow({ db, flow, lead: paidLead, connection, resumeAfterId: claimed.node_id });
-      processed.push({ txid, ok: true, result });
+      processed.push({ txid, ok: true, site_payment: sitePayment, result });
     } catch (error) {
       console.error('[efi webhook] flow failed', { txid, lead_id: paidLead.id, error: error?.message || String(error) });
       processed.push({ txid, error: error?.message || 'Fluxo falhou.' });

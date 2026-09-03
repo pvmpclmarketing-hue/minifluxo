@@ -117,6 +117,21 @@ EFI_WEBHOOK_RELAY_SECRET=<mesmo valor usado no relay da Oracle>
 
 Depois de mudar uma variável da Vercel, faça um novo deploy de produção.
 
+### Site TikTok com Pix Efí
+
+O funil `/tiktok` do site de música pode usar a Efí sem expor certificado ou credenciais no Supabase. O site chama `POST /api/webhooks/site/efi-pix` no Minifluxo, que cria a cobrança com o P12 da conta, guarda o `txid` e devolve o QR Code/copia e cola para a tela do cliente.
+
+Além das variáveis do relay, configure na Vercel do Minifluxo:
+
+```env
+EFI_SITE_PAYMENT_WEBHOOK_URL=https://<projeto-supabase>.supabase.co/functions/v1/efi-payment-webhook
+EFI_SITE_PAYMENT_WEBHOOK_SECRET=<segredo longo compartilhado apenas com o Supabase>
+```
+
+No Supabase do site, configure o mesmo valor em `EFI_SITE_PAYMENT_WEBHOOK_SECRET`. Ao receber o Pix pelo relay, o Minifluxo chama esse endpoint assinado para marcar apenas o pedido correspondente como pago. Esse evento é idempotente pelo `txid`, registra as conversões Meta/TikTok e não dispara um segundo fluxo de WhatsApp.
+
+Para o site, o fluxo configurado em **Pedido vindo do site** deve conter um card **Pagamento confirmado** antes da etapa de geração/entrega. O Minifluxo associa esse card ao `txid`; após o webhook Efí, ele continua exatamente a partir da próxima etapa.
+
 ## Credenciais cadastradas no painel
 
 Cada conta do WhatsEntregavel cadastra na aba **APIs**:
