@@ -99,9 +99,9 @@ export async function POST(request) {
       const { data: existing } = await db.from('leads').select('id,status,kie_task_id,order_context').eq('owner_id', flow.owner_id).eq('external_order_id', orderContext.sourceOrderId).maybeSingle();
       if (existing) {
         const execution = existing.order_context?.flow_execution || {};
-        if (execution.payment_node_id && existing.status === 'waiting_payment') {
-          resumeAfterId = execution.payment_node_id;
-          leadValues.order_context = { ...(existing.order_context || {}), ...orderContext, paid: true, flow_execution: { flow_id: flow.id, payment_node_id: execution.payment_node_id } };
+        if ((execution.payment_node_id && existing.status === 'waiting_payment') || (execution.kie_node_id && existing.status === 'waiting_pix')) {
+          resumeAfterId = execution.payment_node_id || execution.kie_node_id;
+          leadValues.order_context = { ...(existing.order_context || {}), ...orderContext, paid: true, flow_execution: { flow_id: flow.id, ...(execution.payment_node_id ? { payment_node_id: execution.payment_node_id } : { kie_node_id: execution.kie_node_id }) } };
         }
         const isWaiting = Boolean(execution.wait_node_id || execution.delay_node_id || execution.kie_node_id || (execution.payment_node_id && !resumeAfterId));
         const retryable = !existing.kie_task_id && !isWaiting && ['new', 'in_progress', 'generating', 'failed', 'error'].includes(existing.status);
