@@ -100,12 +100,20 @@ export async function POST(request) {
     if (Number(recovery.retry_attempts || 0) >= 1) continue;
     const execution = item.order_context?.flow_execution;
     try {
-      const [{ data: flow }, { data: connection }] = await Promise.all([
+      const [{ data: flow }, { data: originalConnection }] = await Promise.all([
         db.from('flows').select('*').eq('id', execution?.flow_id).eq('owner_id', item.owner_id).eq('status', 'active').maybeSingle(),
         db.from('connections').select('*').eq('id', item.connection_id).eq('owner_id', item.owner_id).eq('status', 'connected').maybeSingle()
       ]);
+      let connection = originalConnection;
+      // A entrega pode ter sido marcada como falha durante uma desconexão e a
+      // conexão original ter sido removida. Só migra para o número novo quando
+      // existe exatamente uma conexão ativa na mesma conta.
+      if (!connection) {
+        const { data: activeConnections } = await db.from('connections').select('*').eq('owner_id', item.owner_id).eq('status', 'connected').order('created_at', { ascending: false }).limit(2);
+        if ((activeConnections || []).length === 1) connection = activeConnections[0];
+      }
       if (!flow || !connection) continue;
-      const { data: claimed } = await db.from('leads').update({ order_context: { ...(item.order_context || {}), delivery_recovery: { ...recovery, retry_attempts: Number(recovery.retry_attempts || 0) + 1, retried_at: new Date().toISOString() } }, updated_at: new Date().toISOString() }).eq('id', item.id).eq('owner_id', item.owner_id).eq('connection_id', connection.id).eq('status', 'delivery_failed').select().maybeSingle();
+      const { data: claimed } = await db.from('leads').update({ connection_id: connection.id, provider: connection.provider, order_context: { ...(item.order_context || {}), delivery_recovery: { ...recovery, retry_attempts: Number(recovery.retry_attempts || 0) + 1, retried_at: new Date().toISOString() } }, updated_at: new Date().toISOString() }).eq('id', item.id).eq('owner_id', item.owner_id).eq('connection_id', item.connection_id).eq('status', 'delivery_failed').select().maybeSingle();
       if (!claimed) continue;
       await retryKieDelivery({ db, flow, lead: claimed, connection });
       recoveredDelivery += 1;
