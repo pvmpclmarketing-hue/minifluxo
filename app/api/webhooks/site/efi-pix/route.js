@@ -1,4 +1,4 @@
-import { createHash } from 'crypto';
+import { createHash, timingSafeEqual } from 'crypto';
 import { NextResponse } from 'next/server';
 import { adminClient } from '../../../supabase';
 import { credentialsFor, efiRequest, executeFlow } from '../../../flow-engine';
