@@ -6,6 +6,15 @@ import { credentialsFor, efiRequest, executeFlow } from '../../../flow-engine';
 export const runtime = 'nodejs';
 
 function cleanPhone(value) { return String(value || '').replace(/\D/g, ''); }
+function siteSecretMatches(value) {
+  const received = String(value || '');
+  // Em instalações já existentes, reutilizamos o segredo privado que também
+  // autentica o callback Minifluxo -> Supabase. Uma instalação nova pode usar
+  // SITE_WEBHOOK_SECRET dedicado sem alterar este endpoint.
+  return [process.env.SITE_WEBHOOK_SECRET, process.env.EFI_SITE_PAYMENT_WEBHOOK_SECRET]
+    .filter(Boolean)
+    .some((expected) => received.length === expected.length && timingSafeEqual(Buffer.from(received), Buffer.from(expected)));
+}
 function efiError(prefix, response) { return new Error(`${prefix}: ${response.data?.mensagem || response.data?.message || response.raw || response.status}`); }
 function urlsFrom(value, result = new Set()) {
   if (!value) return result;
@@ -41,7 +50,7 @@ async function efiToken(efi) {
 
 export async function POST(request) {
   try {
-    if (!process.env.SITE_WEBHOOK_SECRET || request.headers.get('x-site-secret') !== process.env.SITE_WEBHOOK_SECRET) return new NextResponse(null, { status: 401 });
+    if (!siteSecretMatches(request.headers.get('x-site-secret'))) return new NextResponse(null, { status: 401 });
     const body = await request.json();
     const phone = cleanPhone(body.phone), orderId = String(body.order_id || '').trim(), amountCents = Number(body.amount_cents);
     if (!body.integration_key || !orderId || !body.name || !phone || !Number.isInteger(amountCents) || amountCents < 1) return NextResponse.json({ error: 'Pedido Efí inválido.' }, { status: 400 });
