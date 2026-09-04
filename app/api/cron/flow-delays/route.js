@@ -54,6 +54,20 @@ export async function POST(request) {
       recoveredDisconnected += 1;
     } catch (recoveryError) {
       console.error('[flow recovery] failed', { leadId: item.id, error: recoveryError.message });
+      // A UazAPI confirma de forma definitiva quando o número não tem conta no
+      // WhatsApp. Não deixe esse pedido preso em andamento, nem gere uma música
+      // que não poderá ser entregue.
+      if (/not on whatsapp|nao esta no whatsapp|não está no whatsapp/i.test(String(recoveryError.message || ''))) {
+        await db.from('leads').update({
+          status: 'delivery_failed',
+          order_context: {
+            ...(item.order_context || {}),
+            flow_execution: { ...(item.order_context?.flow_execution || {}), state: 'failed', reason: 'recipient_not_on_whatsapp', failed_at: new Date().toISOString() },
+            delivery_error: 'O número informado pelo site não possui WhatsApp ativo.',
+          },
+          updated_at: new Date().toISOString(),
+        }).eq('id', item.id).eq('owner_id', item.owner_id).eq('status', 'in_progress');
+      }
     }
   }
   for (const item of pending || []) {
@@ -98,6 +112,9 @@ export async function POST(request) {
   for (const item of failedDeliveries || []) {
     const recovery = item.order_context?.delivery_recovery || {};
     const execution = item.order_context?.flow_execution;
+    // Falha permanente de destinatário: só uma correção do telefone no site
+    // pode permitir uma nova tentativa. Evita reprocessamento automático.
+    if (execution?.reason === 'recipient_not_on_whatsapp') continue;
     try {
       const [{ data: flow }, { data: originalConnection }] = await Promise.all([
         db.from('flows').select('*').eq('id', execution?.flow_id).eq('owner_id', item.owner_id).eq('status', 'active').maybeSingle(),
