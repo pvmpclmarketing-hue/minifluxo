@@ -72,12 +72,16 @@ export async function POST(request) {
     const previewTracks = previewAudios(body);
     if (mode === 'deliver_existing_preview_audio' && previewTracks.length !== 2) return NextResponse.json({ error: 'A entrega da previa exige exatamente duas URLs em preview.audios.' }, { status: 422 });
     const audios = mode === 'deliver_existing_preview_audio' ? previewTracks : [];
-    const musicRequest = body.music_request || body.custom_fields?.story || body.custom_fields?.music_style || body.story || body.lyric_text || null;
-    if (mode === 'generate_music_in_miniflux' && !body.lyric_text && !body.lyricText) return NextResponse.json({ error: 'lyric_text e obrigatorio para gerar a musica no WhatsEntregavel.' }, { status: 400 });
+    const lyricText = body.lyric_text || body.lyricText || body.quiz?.lyric_text || body.quiz?.lyricText || body.quiz?.lyrics || body.custom_fields?.lyric_text || body.custom_fields?.lyricText || null;
+    const musicRequest = body.music_request || body.custom_fields?.story || body.custom_fields?.music_style || body.story || lyricText || null;
+    if (mode === 'generate_music_in_miniflux' && !lyricText) {
+      console.warn('[payment webhook] rejected missing lyric text', { order_id: orderId, has_quiz: Boolean(body.quiz), quiz_keys: body.quiz && typeof body.quiz === 'object' ? Object.keys(body.quiz) : [] });
+      return NextResponse.json({ error: 'lyric_text e obrigatorio para gerar a musica no WhatsEntregavel.' }, { status: 400 });
+    }
     const orderContext = {
       quiz: body.quiz || body.custom_fields?.quiz || {},
       story: body.story || '',
-      lyricText: body.lyric_text || '',
+      lyricText: lyricText || '',
       paid: true,
       sourceOrderId: orderId,
       idempotency_key: body.idempotency_key || `payment:${orderId}`,
