@@ -97,7 +97,6 @@ export async function POST(request) {
   if (failedError) return NextResponse.json({ error: failedError.message }, { status: 500 });
   for (const item of failedDeliveries || []) {
     const recovery = item.order_context?.delivery_recovery || {};
-    if (Number(recovery.retry_attempts || 0) >= 1) continue;
     const execution = item.order_context?.flow_execution;
     try {
       const [{ data: flow }, { data: originalConnection }] = await Promise.all([
@@ -113,7 +112,12 @@ export async function POST(request) {
         if ((activeConnections || []).length === 1) connection = activeConnections[0];
       }
       if (!flow || !connection) continue;
-      const { data: claimed } = await db.from('leads').update({ connection_id: connection.id, provider: connection.provider, order_context: { ...(item.order_context || {}), delivery_recovery: { ...recovery, retry_attempts: Number(recovery.retry_attempts || 0) + 1, retried_at: new Date().toISOString() } }, updated_at: new Date().toISOString() }).eq('id', item.id).eq('owner_id', item.owner_id).eq('connection_id', item.connection_id).eq('status', 'delivery_failed').select().maybeSingle();
+      const retryAfterRecreation = !originalConnection && connection.id !== item.connection_id;
+      if (Number(recovery.retry_attempts || 0) >= 1 && (!retryAfterRecreation || Number(recovery.recreation_retry_attempts || 0) >= 1)) continue;
+      const values = { connection_id: connection.id, provider: connection.provider, order_context: { ...(item.order_context || {}), delivery_recovery: { ...recovery, retry_attempts: Number(recovery.retry_attempts || 0) + 1, recreation_retry_attempts: Number(recovery.recreation_retry_attempts || 0) + (retryAfterRecreation ? 1 : 0), retried_at: new Date().toISOString() } }, updated_at: new Date().toISOString() };
+      let claim = db.from('leads').update(values).eq('id', item.id).eq('owner_id', item.owner_id).eq('status', 'delivery_failed');
+      claim = item.connection_id ? claim.eq('connection_id', item.connection_id) : claim.is('connection_id', null);
+      const { data: claimed } = await claim.select().maybeSingle();
       if (!claimed) continue;
       await retryKieDelivery({ db, flow, lead: claimed, connection });
       recoveredDelivery += 1;
