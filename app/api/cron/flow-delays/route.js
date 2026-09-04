@@ -15,6 +15,47 @@ export async function POST(request) {
   const { data: pending, error } = await db.from('leads').select('*').eq('status', 'waiting_delay').limit(100);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   let resumed = 0; let recoveredKie = 0; let stopped = expired?.length || 0;
+  // Se uma conexão for recriada depois de uma queda da API, pedidos já pagos
+  // podem ter ficado sem `connection_id` antes mesmo da primeira etapa rodar.
+  // Recuperamos apenas esse caso específico: não há checkpoint, não há tarefa
+  // Kie e o pedido é de geração. Isso impede repetir fluxos que já estejam
+  // aguardando resposta/Pix ou que já tenham começado a gerar uma música.
+  let recoveredDisconnected = 0;
+  const recoveryCutoff = new Date(now - 2 * 60 * 1000).toISOString();
+  const { data: orphanedPayments, error: orphanedError } = await db.from('leads')
+    .select('*')
+    .eq('status', 'in_progress')
+    .eq('source', 'payment')
+    .is('connection_id', null)
+    .lt('updated_at', recoveryCutoff)
+    .limit(50);
+  if (orphanedError) return NextResponse.json({ error: orphanedError.message }, { status: 500 });
+  for (const item of orphanedPayments || []) {
+    const context = item.order_context || {};
+    if (context.fulfillment_mode !== 'generate_music_in_miniflux' || context.flow_execution || item.kie_task_id) continue;
+    try {
+      const { data: connections } = await db.from('connections').select('*').eq('owner_id', item.owner_id).eq('status', 'connected').order('created_at', { ascending: false }).limit(2);
+      // Não tentamos adivinhar entre dois números conectados: só a conexão
+      // única e ativa da conta pode receber a retomada automática.
+      if ((connections || []).length !== 1) continue;
+      const connection = connections[0];
+      const { data: config } = await db.from('connection_flow_configs').select('payment_generation_flow_id,owner_id').eq('connection_id', connection.id).maybeSingle();
+      if (!config?.payment_generation_flow_id || config.owner_id !== item.owner_id) continue;
+      const { data: flow } = await db.from('flows').select('*').eq('id', config.payment_generation_flow_id).eq('owner_id', item.owner_id).eq('status', 'active').maybeSingle();
+      if (!flow) continue;
+      const { data: claimed } = await db.from('leads').update({
+        connection_id: connection.id,
+        provider: connection.provider,
+        order_context: { ...context, flow_execution: { flow_id: flow.id, recovered_after_disconnect_at: new Date().toISOString() } },
+        updated_at: new Date().toISOString(),
+      }).eq('id', item.id).is('connection_id', null).eq('status', 'in_progress').select().maybeSingle();
+      if (!claimed) continue;
+      await executeFlow({ db, flow, lead: claimed, connection });
+      recoveredDisconnected += 1;
+    } catch (recoveryError) {
+      console.error('[flow recovery] failed', { leadId: item.id, error: recoveryError.message });
+    }
+  }
   for (const item of pending || []) {
     const execution = item.order_context?.flow_execution;
     if (!execution?.delay_node_id || !execution.resume_at || Date.parse(execution.resume_at) > now) continue;
@@ -72,5 +113,5 @@ export async function POST(request) {
       console.error('[kie delivery recovery] failed', { leadId: item.id, error: deliveryError.message });
     }
   }
-  return NextResponse.json({ received: true, resumed, kie_recovered: recoveredKie, delivery_recovered: recoveredDelivery, timed_out: stopped, timeout_hours: timeoutHours });
+  return NextResponse.json({ received: true, resumed, disconnected_recovered: recoveredDisconnected, kie_recovered: recoveredKie, delivery_recovered: recoveredDelivery, timed_out: stopped, timeout_hours: timeoutHours });
 }
