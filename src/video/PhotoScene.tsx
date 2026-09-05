@@ -1,0 +1,4 @@
+import React from 'react';
+import { AbsoluteFill, Sequence, interpolate, useCurrentFrame } from 'remotion';
+import { AnimatedPhoto } from './AnimatedPhoto'; import { PhotoBackground } from './PhotoBackground'; import { secondsToFrames } from './timeline'; import type { TimelinePhoto } from './types';
+export function PhotoScene({photo}:{photo:TimelinePhoto}) { const frame=useCurrentFrame(); const local=Math.max(0,frame-secondsToFrames(photo.start)); const duration=secondsToFrames(photo.end-photo.start); const fade=Math.min(interpolate(local,[0,15],[0,1],{extrapolateRight:'clamp'}),interpolate(local,[Math.max(0,duration-15),duration],[1,0],{extrapolateLeft:'clamp'})); return <Sequence from={secondsToFrames(photo.start)} durationInFrames={duration}><AbsoluteFill style={{overflow:'hidden',opacity:fade,background:'#111'}}><PhotoBackground src={photo.url}/><AnimatedPhoto src={photo.url} motion={photo.motion} durationFrames={duration}/></AbsoluteFill></Sequence>; }

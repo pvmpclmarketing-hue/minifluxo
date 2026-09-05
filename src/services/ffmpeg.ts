@@ -1,0 +1,2 @@
+import { spawn } from 'node:child_process';
+export function ffprobeDuration(file:string){return new Promise<number>((resolve,reject)=>{const child=spawn('ffprobe',['-v','error','-show_entries','format=duration','-of','default=noprint_wrappers=1:nokey=1',file]);let output='';child.stdout.on('data',data=>output+=data);child.on('error',()=>reject(new Error('FFmpeg/ffprobe não está instalado no worker.')));child.on('close',code=>code===0?resolve(Number(output.trim())):reject(new Error('Não foi possível ler a duração do áudio.')));});}

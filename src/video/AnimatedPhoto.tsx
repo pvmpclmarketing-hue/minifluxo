@@ -1,0 +1,4 @@
+import React from 'react';
+import { interpolate, useCurrentFrame, useVideoConfig } from 'remotion';
+import type { MotionPreset } from './types';
+export function AnimatedPhoto({src,motion,durationFrames}:{src:string;motion:MotionPreset;durationFrames:number}) { const frame=useCurrentFrame(); const {width,height}=useVideoConfig(); const progress=Math.min(1,frame/Math.max(1,durationFrames)); const zoom=motion==='zoom_out'?interpolate(progress,[0,1],[1.08,1]):motion==='zoom_in'?interpolate(progress,[0,1],[1,1.08]):1.05; const x=motion==='pan_left'?interpolate(progress,[0,1],[2,-2]):motion==='pan_right'?interpolate(progress,[0,1],[-2,2]):0; const y=motion==='pan_up'?interpolate(progress,[0,1],[2,-2]):0; return <img src={src} style={{position:'absolute',inset:0,width,height,objectFit:'contain',transform:`scale(${zoom}) translate(${x}%, ${y}%)`}}/>; }

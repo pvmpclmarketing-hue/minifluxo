@@ -9,18 +9,26 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "preview": "remotion studio src/video/RemotionRoot.tsx",
+    "render:sample": "tsx worker/renderSample.ts",
+    "video:worker": "tsx worker/videoWorker.ts"
   },
   "dependencies": {
+    "@remotion/bundler": "^4.0.400",
+    "@remotion/renderer": "^4.0.400",
     "@supabase/ssr": "^0.12.3",
     "@supabase/supabase-js": "^2.110.9",
     "@xyflow/react": "^12.11.2",
     "next": "^16.2.12",
     "react": "^19.2.4",
-    "react-dom": "^19.2.4"
+    "react-dom": "^19.2.4",
+    "remotion": "^4.0.400"
   },
   "devDependencies": {
     "eslint": "^9.39.1",
-    "eslint-config-next": "^16.2.12"
+    "eslint-config-next": "^16.2.12",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3"
   }
 }

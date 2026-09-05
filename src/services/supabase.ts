@@ -1,0 +1,6 @@
+import { createClient } from '@supabase/supabase-js'; import type { VideoOrder } from '../video/types';
+export const db=createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!,process.env.SUPABASE_SERVICE_ROLE_KEY!);
+export async function claimPendingVideoOrder():Promise<VideoOrder|null>{const {data,error}=await db.rpc('claim_pending_video_order');if(error)throw error;return data?.[0]??null;}
+export async function updateVideoStatus(id:string,status:VideoOrder['status'],error?:string){const update:Record<string,unknown>={status,updated_at:new Date().toISOString()};if(error)update.error=error;const {error:failure}=await db.from('video_orders').update(update).eq('id',id);if(failure)throw failure;}
+export async function uploadRenderedVideo(orderId:string,file:Uint8Array){const path=`videos/${orderId}/music-video.mp4`;const {error}=await db.storage.from('video-outputs').upload(path,file,{contentType:'video/mp4',upsert:true});if(error)throw error;return db.storage.from('video-outputs').getPublicUrl(path).data.publicUrl;}
+export async function updateVideoOutput(id:string,url:string){const {error}=await db.from('video_orders').update({status:'complete',output_url:url,error:null,updated_at:new Date().toISOString()}).eq('id',id);if(error)throw error;}
