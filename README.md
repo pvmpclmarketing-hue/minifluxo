@@ -31,7 +31,11 @@ O MVP cria vídeos determinísticos de fotos, MP3 e letra. A interface de WhatsA
 
 Não execute o worker na Vercel: renderização de 60 segundos exige disco temporário, FFmpeg e pode superar o tempo de execução de uma função serverless.
 
-### Criar um job
+### Criar e testar pelo painel
+
+No menu do Minifluxo, abra **Clipes**. Envie um MP3, de 4 a 8 fotos e cole a letra. Os arquivos ficam em um bucket privado (`video-inputs`), e só o worker pode baixá-los para o render. A lista mostra fila, renderização, falha ou o link do MP4 concluído.
+
+### Criar um job por API
 
 Com o usuário logado no Minifluxo, faça `POST /api/videos` com `audio_url`, `photos` (4–8 URLs), `lyrics`, `lyrics_timestamps` opcional e `intro_text` opcional. Consulte os jobs da conta em `GET /api/videos`.
 
