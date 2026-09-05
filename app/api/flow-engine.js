@@ -39,7 +39,11 @@ async function deliverAudioTracks(db,lead,connection,audios,intro){
 }
 
 function variablesFor(lead,extra={}){
-  const context=lead.order_context||{};return {name:lead.name,phone:lead.phone,story:context.story||'',lyric_text:context.lyricText||lead.music_request||'',music_request:lead.music_request||'',last_message:context.last_message||'',quiz:context.quiz||{},flow_data:context.flow_data||{},paid:!!context.paid,lead:{id:lead.id,...lead},kie:{audios:extra.audios||[]},...extra};
+  // A letra de uma música comprada é imutável e pertence ao pedido. Não use
+  // `music_request` como fallback aqui: ele pode conter apenas um briefing ou
+  // dados de uma conversa antiga. Sem lyricText, a geração deve parar e ser
+  // diagnosticada, nunca aproveitar uma letra diferente.
+  const context=lead.order_context||{};return {name:lead.name,phone:lead.phone,story:context.story||'',lyric_text:context.lyricText||'',music_request:lead.music_request||'',last_message:context.last_message||'',quiz:context.quiz||{},flow_data:context.flow_data||{},paid:!!context.paid,lead:{id:lead.id,...lead},kie:{audios:extra.audios||[]},...extra};
 }
 function conditionMatches(config,variables){const received=valueAt(variables,config.field||'');const expected=render(config.value||'',variables);if(config.operator==='existe')return received!==undefined&&received!==null&&received!=='';if(config.operator==='contem')return asText(received).toLowerCase().includes(expected.toLowerCase());if(config.operator==='maior que')return Number(received)>Number(expected);return String(received).toLowerCase()===String(expected).toLowerCase();}
 const comparable=value=>String(value||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim().toLowerCase();
@@ -132,7 +136,14 @@ async function startKie(db,flow,lead,node,variables){
   const callbackBase=String(process.env.WHATSENTREGAVEL_URL||deploymentHost).replace(/^https?:\/\//,'').replace(/\/$/,'');
   if(!callbackBase)throw new Error('Não foi possível identificar a URL pública para o callback da Kie.');
   const callbackSecret=process.env.KIE_WEBHOOK_SECRET||(process.env.FLOW_SECRETS_KEY?hashSecret(`${process.env.FLOW_SECRETS_KEY}:kie-callback`):'');if(!callbackSecret)throw new Error('Configure KIE_WEBHOOK_SECRET ou FLOW_SECRETS_KEY na Vercel.');
-  const quiz=variables.quiz||{};const prompt=variables.lyric_text||variables.music_request||variables.story;if(!prompt)throw new Error('O pedido não possui letra ou briefing para gerar a música.');
+  const quiz=variables.quiz||{};
+  const orderContext=lead.order_context||{};
+  const sourceOrderId=orderContext.sourceOrderId||lead.external_order_id||null;
+  if(!sourceOrderId)throw new Error('A geração foi bloqueada: este lead não possui o identificador do pedido.');
+  if(lead.external_order_id&&orderContext.sourceOrderId&&lead.external_order_id!==orderContext.sourceOrderId)throw new Error('A geração foi bloqueada: o pedido do lead não corresponde ao contexto recebido.');
+  // A única fonte válida para Kie é a letra recebida no payload DESTE pedido.
+  const prompt=String(orderContext.lyricText||'').trim();
+  if(!prompt)throw new Error('A geração foi bloqueada: a letra deste pedido não está disponível. Reenvie o pagamento com lyric_text.');
   const style=config.style||quiz.music_style||quiz.genre||quiz.genre_musical||'música personalizada emocionante';
   const title=`Música para ${lead.name}`.slice(0,80);const voice=quiz.voice_gender||quiz.vocal_gender||quiz.genero_voz;
   const payload={prompt:String(prompt).slice(0,5000),customMode:true,instrumental:!!config.instrumental,model:modelName(config.model),style:String(style).slice(0,1000),title,callBackUrl:`https://${callbackBase}/api/webhooks/kie?secret=${encodeURIComponent(callbackSecret)}`};
@@ -146,7 +157,10 @@ async function startKie(db,flow,lead,node,variables){
   const taskId=result.data?.taskId||result.data?.task_id||result.taskId||result.task_id||result.data?.id||result.id;
   if(!taskId){console.error('[kie generation] missing task id',{status:response.status,api_code:result.code??null,message:providerMessage||null,endpoint:new URL(endpoint).pathname,result_keys:Object.keys(result),data_keys:result.data&&typeof result.data==='object'?Object.keys(result.data):[]});throw new Error(`Kie.ai não iniciou a geração: ${providerMessage||'resposta sem identificador da tarefa.'}`);}
   console.info('[kie generation] task accepted',{task_id:String(taskId),endpoint:new URL(endpoint).pathname});
-  const context={...(lead.order_context||{}),flow_execution:{flow_id:flow.id,kie_node_id:node.id}};await db.from('leads').update({status:'generating',kie_task_id:taskId,order_context:context,updated_at:new Date().toISOString()}).eq('id',lead.id);return {waitingKie:true,taskId};
+  // O hash permite auditar qual letra foi enviada sem persistir uma segunda
+  // cópia do texto. Ele impede que diagnósticos misturem duas compras do mesmo
+  // telefone.
+  const context={...orderContext,generation:{...(orderContext.generation||{}),source_order_id:sourceOrderId,lyric_hash:createHash('sha256').update(prompt).digest('hex'),started_at:new Date().toISOString()},flow_execution:{flow_id:flow.id,kie_node_id:node.id}};await db.from('leads').update({status:'generating',kie_task_id:taskId,order_context:context,updated_at:new Date().toISOString()}).eq('id',lead.id).eq('owner_id',lead.owner_id).eq('external_order_id',sourceOrderId);return {waitingKie:true,taskId};
 }
 
 export async function executeFlow({db,flow,lead,connection,resumeAfterId=null,resumeHandle=null,audios=[]}){

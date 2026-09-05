@@ -114,6 +114,14 @@ export async function POST(request) {
     stage = 'create_lead';
     if (!lead) {
       const { data, error } = await db.from('leads').insert({ owner_id: flow.owner_id, source: 'payment', provider: 'payment', external_order_id: orderContext.sourceOrderId, ...leadValues }).select().single();
+      // Dois webhooks iguais podem chegar no mesmo milissegundo. A restrição
+      // única do banco é a autoridade; em conflito, reutilizamos a execução
+      // que venceu a corrida em vez de criar uma segunda música para o pedido.
+      if (error?.code === '23505' && orderContext.sourceOrderId) {
+        const { data: concurrent, error: concurrentError } = await db.from('leads').select('*').eq('owner_id', flow.owner_id).eq('external_order_id', orderContext.sourceOrderId).maybeSingle();
+        if (concurrentError || !concurrent) throw concurrentError || error;
+        return NextResponse.json({ received: true, duplicate: true, execution_id: concurrent.id, status: concurrent.status });
+      }
       if (error) throw error;
       lead = data;
     }
