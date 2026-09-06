@@ -3,8 +3,11 @@ import { adminClient, requireUser } from '../supabase';
 import { buildShotstackEdit } from '../../../lib/lyric-video/build-shotstack-edit';
 import { normalizeCaptionBlocks } from '../../../lib/lyric-video/captions';
 import { resolveLyricTheme } from '../../../lib/lyric-video/themes';
+import { createSyncedCaptionBlocks } from '../../../lib/lyric-video/sync-lyrics';
+import { credentialsFor } from '../flow-engine';
 
 export const dynamic = 'force-dynamic';
+export const maxDuration = 60;
 
 // The configured key belongs to the production account. An explicit environment
 // variable can still override this for a separate sandbox setup.
@@ -62,6 +65,20 @@ export async function POST(request) {
     lyricVideo = data;
 
     const inputUrl = await signedAudioUrl(db, lyricVideo.audio_url);
+    const suppliedTimestamps = normalizeCaptionBlocks(lyricVideo.lyrics_timestamps);
+    const syncedTimestamps = suppliedTimestamps.length ? suppliedTimestamps : await createSyncedCaptionBlocks({
+      audioUrl: inputUrl,
+      lyrics: lyricVideo.lyrics,
+      apiKey: (await credentialsFor(db, null, user.id)).gpt || process.env.OPENAI_API_KEY,
+    });
+    const { error: timingError } = await db.from('lyric_video_orders').update({
+      lyrics_timestamps: syncedTimestamps,
+      timing_source: suppliedTimestamps.length ? 'provided' : 'transcribed',
+      status: 'processing',
+      updated_at: new Date().toISOString(),
+    }).eq('id', lyricVideo.id);
+    if (timingError) throw timingError;
+    lyricVideo = { ...lyricVideo, lyrics_timestamps: syncedTimestamps };
     const built = buildShotstackEdit({
       audioUrl: inputUrl,
       lyrics: lyricVideo.lyrics,
