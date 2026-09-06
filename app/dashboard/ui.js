@@ -31,9 +31,9 @@ export default function Dashboard({initialTab='dashboard',userEmail,initialLeads
 
   const connected=connections.find(item=>item.status==='connected');
   const metrics=useMemo(()=>({total:leads.length,waiting:leads.filter(item=>item.status!=='completed').length,complete:leads.filter(item=>item.status==='completed').length}),[leads]);
-  const titles={dashboard:'Dashboard',flows:'Fluxos',connections:'Conexoes',leads:'Atendimentos',contacts:'Historico de contatos',dispatches:'Disparos',videos:'Clipes',apis:'APIs',webhooks:'Webhooks'};
+  const titles={dashboard:'Dashboard',flows:'Fluxos',connections:'Conexoes',leads:'Atendimentos',contacts:'Historico de contatos',dispatches:'Disparos',videos:'Lyric videos',apis:'APIs',webhooks:'Webhooks'};
   const title=tab==='flow'?selected?.name:titles[tab];
-  const menu=[['dashboard','Dashboard'],['flows','Fluxos'],['connections','Conexoes'],['leads','Atendimentos'],['contacts','Historico de contatos'],['dispatches','Disparos'],['videos','Clipes'],['apis','APIs'],['webhooks','Webhooks']];
+  const menu=[['dashboard','Dashboard'],['flows','Fluxos'],['connections','Conexoes'],['leads','Atendimentos'],['contacts','Historico de contatos'],['dispatches','Disparos'],['videos','Lyric videos'],['apis','APIs'],['webhooks','Webhooks']];
 
   async function submit(url,event,done){
     event.preventDefault();setError('');

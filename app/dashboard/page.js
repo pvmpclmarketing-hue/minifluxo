@@ -19,6 +19,6 @@ export default async function DashboardPage({ searchParams }) {
   const { data: connections = [] } = await supabase.from('connections').select('*').order('created_at', { ascending: false });
   const { data: flows = [] } = await supabase.from('flows').select('*').order('created_at', { ascending: false });
   const { data: dispatchConfigs = [] } = await supabase.from('connection_flow_configs').select('*');
-  const { data: videos = [] } = await supabase.from('video_orders').select('*').order('created_at', { ascending: false }).limit(50);
+  const { data: videos = [] } = await supabase.from('lyric_video_orders').select('*').order('created_at', { ascending: false }).limit(50);
   return <Dashboard initialTab={initialTab} userEmail={user.email} initialLeads={leads || []} initialConnections={connections || []} initialFlows={flows || []} initialDispatchConfigs={dispatchConfigs || []} initialVideos={videos || []} />;
 }
