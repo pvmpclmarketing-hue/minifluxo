@@ -17,10 +17,15 @@ do Supabase.
 - Código: `/opt/whatsentregavel/app`
 - Arquivo de ambiente: `/etc/whatsentregavel/video-worker.env`
 - Estado validado em 06/09/2026: serviço `active (running)` e worker online.
+- Dependências de renderização validadas: Chrome Headless do Remotion e `ffprobe`
+  incluído pelo pacote `@remotion/compositor-linux-x64-gnu`.
 
 O worker usa uma renderização por vez (`concurrency: 1`) para caber no limite de
 memória da máquina. Se uma forma A1 Flex Always Free estiver disponível no futuro,
 prefira 1 OCPU e 6 GB de RAM para reduzir o tempo de renderização.
+
+Não instale FFmpeg globalmente apenas para o worker: o código usa o binário
+embarcado pelo Remotion, evitando uma dependência adicional na VM.
 
 ## Fluxo de dados
 
