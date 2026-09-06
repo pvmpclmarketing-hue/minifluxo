@@ -16,6 +16,7 @@ do Supabase.
 - Serviço: `whatsentregavel-video-worker.service`
 - Código: `/opt/whatsentregavel/app`
 - Arquivo de ambiente: `/etc/whatsentregavel/video-worker.env`
+- Estado validado em 06/09/2026: serviço `active (running)` e worker online.
 
 O worker usa uma renderização por vez (`concurrency: 1`) para caber no limite de
 memória da máquina. Se uma forma A1 Flex Always Free estiver disponível no futuro,
@@ -25,7 +26,8 @@ prefira 1 OCPU e 6 GB de RAM para reduzir o tempo de renderização.
 
 ```text
 Painel Clipes -> bucket privado video-inputs -> video_orders
-                                             -> worker Oracle + FFmpeg
+                                             -> worker Oracle
+                                             -> API interna protegida do Minifluxo
                                              -> bucket público video-outputs
                                              -> painel exibe MP4 concluído
 ```
@@ -44,12 +46,17 @@ sudo journalctl -u whatsentregavel-video-worker -n 200 --no-pager
 sudo systemctl restart whatsentregavel-video-worker
 ```
 
-Para publicar uma nova versão do worker:
+Para publicar uma nova versão do worker, baixe o código sem levar nenhum segredo
+para o repositório:
 
 ```bash
-cd /opt/whatsentregavel/app
-git pull origin main
-npm ci
+sudo systemctl stop whatsentregavel-video-worker
+sudo rm -rf /opt/whatsentregavel/app /tmp/minifluxo-main.tar.gz
+sudo curl -fsSL https://github.com/pvmpclmarketing-hue/minifluxo/archive/refs/heads/main.tar.gz \
+  -o /tmp/minifluxo-main.tar.gz
+sudo tar -xzf /tmp/minifluxo-main.tar.gz -C /opt/whatsentregavel
+sudo mv /opt/whatsentregavel/minifluxo-main /opt/whatsentregavel/app
+cd /opt/whatsentregavel/app && sudo npm install --no-audit --no-fund
 sudo systemctl restart whatsentregavel-video-worker
 ```
 
@@ -59,27 +66,33 @@ sudo systemctl restart whatsentregavel-video-worker
    `renderizando`, `concluído` ou `falhou`.
 2. Em caso de falha, consulte os logs do serviço acima. Nunca copie o conteúdo do
    arquivo de ambiente para telas, tickets ou commits.
-3. Confirme a presença de `ffmpeg` e `ffprobe` no `PATH` da VM.
-4. Confira se o serviço está com inicialização automática:
+3. Confira se o serviço está com inicialização automática:
 
 ```bash
 sudo systemctl is-enabled whatsentregavel-video-worker
 ```
 
-## Variáveis necessárias
+## Segurança e variáveis necessárias
 
-O arquivo de ambiente contém somente credenciais do servidor necessárias para
-acessar o projeto Supabase do Minifluxo:
+O arquivo de ambiente da VM não possui chave de serviço do Supabase. Ele contém:
 
-- `NEXT_PUBLIC_SUPABASE_URL`
-- `SUPABASE_SERVICE_ROLE_KEY`
+- `WORKER_API_URL=https://minifluxo.vercel.app`
+- `VIDEO_WORKER_TOKEN` — segredo compartilhado exclusivamente entre a VM e a API
+  interna `/api/video-worker` da Vercel.
+- `NODE_OPTIONS=--max-old-space-size=768`
+
+O token também está configurado como `VIDEO_WORKER_TOKEN` no ambiente de
+produção da Vercel. A API rejeita chamadas sem ele (401); a VM só pode executar
+as ações internas `claim`, `status`, `input-urls`, `upload-url` e `complete`.
 
 Esses valores são segredos. Eles não devem ser colocados no frontend, no Git ou em
-capturas de tela.
+capturas de tela. A chave privada SSH usada para manutenção está fora do projeto,
+em `C:\Users\T-GAMER\.ssh\whatsentregavel-video-worker-access`.
 
 ## Observação de rede
 
-A VM precisa de saída HTTPS para baixar dependências e acessar Supabase/GitHub.
+A VM precisa de saída HTTPS para baixar dependências e acessar Vercel,
+Supabase/GitHub.
 Se for usado IP público apenas para essa saída, não exponha aplicações HTTP na VM
 e remova regras de entrada que não sejam indispensáveis. A renderização não abre
 porta web.
