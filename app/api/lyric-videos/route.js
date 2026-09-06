@@ -76,8 +76,8 @@ export async function POST(request) {
     const payload = await response.json();
     const renderId = payload?.response?.id || payload?.id;
     if (!response.ok || !payload?.success || !renderId) {
-      const providerMessage = payload?.message || payload?.error || payload?.response?.message || `HTTP ${response.status}`;
-      console.error('[lyric-video] Shotstack rejected render', { status: response.status, providerMessage, payload });
+      const providerMessage = payload?.message || payload?.error || payload?.errors?.map((item) => item?.message || item?.detail || JSON.stringify(item)).filter(Boolean).join('; ') || payload?.response?.message || `HTTP ${response.status}`;
+      console.error('[lyric-video] Shotstack rejected render', JSON.stringify({ status: response.status, providerMessage, payload }));
       throw new Error(`Shotstack: ${providerMessage}`);
     }
     const { data: updated, error: updateError } = await db.from('lyric_video_orders').update({
