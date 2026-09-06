@@ -75,7 +75,11 @@ export async function POST(request) {
     });
     const payload = await response.json();
     const renderId = payload?.response?.id || payload?.id;
-    if (!response.ok || !payload?.success || !renderId) throw new Error(payload?.message || 'A Shotstack recusou a criação do lyric video.');
+    if (!response.ok || !payload?.success || !renderId) {
+      const providerMessage = payload?.message || payload?.error || payload?.response?.message || `HTTP ${response.status}`;
+      console.error('[lyric-video] Shotstack rejected render', { status: response.status, providerMessage, payload });
+      throw new Error(`Shotstack: ${providerMessage}`);
+    }
     const { data: updated, error: updateError } = await db.from('lyric_video_orders').update({
       status: 'rendering', shotstack_render_id: String(renderId), theme: built.theme, timing_source: built.timingSource, updated_at: new Date().toISOString(), error: null,
     }).eq('id', lyricVideo.id).select().single();
