@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { adminClient } from '../../supabase';
 
 export const dynamic = 'force-dynamic';
-const shotstackBase = () => `https://api.shotstack.io/edit/${process.env.SHOTSTACK_ENVIRONMENT || 'stage'}`;
+const shotstackBase = () => `https://api.shotstack.io/edit/${process.env.SHOTSTACK_ENVIRONMENT || 'v1'}`;
 
 export async function POST(request) {
   try {

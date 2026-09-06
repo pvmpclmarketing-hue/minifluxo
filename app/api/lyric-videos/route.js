@@ -6,7 +6,9 @@ import { resolveLyricTheme } from '../../../lib/lyric-video/themes';
 
 export const dynamic = 'force-dynamic';
 
-const shotstackBase = () => `https://api.shotstack.io/edit/${process.env.SHOTSTACK_ENVIRONMENT || 'stage'}`;
+// The configured key belongs to the production account. An explicit environment
+// variable can still override this for a separate sandbox setup.
+const shotstackBase = () => `https://api.shotstack.io/edit/${process.env.SHOTSTACK_ENVIRONMENT || 'v1'}`;
 
 async function signedAudioUrl(db, audioUrl) {
   if (!audioUrl.startsWith('storage://video-inputs/')) return audioUrl;
