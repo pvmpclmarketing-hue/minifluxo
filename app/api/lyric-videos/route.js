@@ -100,7 +100,7 @@ export async function POST(request) {
       throw new Error(`Shotstack: ${providerMessage}`);
     }
     const { data: updated, error: updateError } = await db.from('lyric_video_orders').update({
-      status: 'rendering', shotstack_render_id: String(renderId), theme: built.theme, timing_source: built.timingSource, updated_at: new Date().toISOString(), error: null,
+      status: 'rendering', shotstack_render_id: String(renderId), theme: built.theme, timing_source: suppliedTimestamps.length ? 'provided' : 'transcribed', updated_at: new Date().toISOString(), error: null,
     }).eq('id', lyricVideo.id).select().single();
     if (updateError) throw updateError;
     return NextResponse.json(updated, { status: 201 });
