@@ -24,13 +24,17 @@ export async function POST(request) {
   const { data: unstartedPayments, error: unstartedError } = await db.from('leads')
     .select('*')
     .eq('status', 'in_progress')
-    .eq('source', 'payment')
+    // Um pagamento vindo do site Efí começa como `source: site` e é
+    // promovido pelo webhook. Incluí-lo aqui torna a recuperação idêntica à
+    // dos pagamentos Asaas caso a confirmação tenha sido gravada mas a
+    // execução do fluxo não tenha começado.
+    .in('source', ['payment', 'site'])
     .lt('updated_at', recoveryCutoff)
     .limit(50);
   if (unstartedError) return NextResponse.json({ error: unstartedError.message }, { status: 500 });
   for (const item of unstartedPayments || []) {
     const context = item.order_context || {};
-    if (!context.paid || context.fulfillment_mode !== 'generate_music_in_miniflux' || context.flow_execution || item.kie_task_id || !String(context.lyricText || '').trim()) continue;
+    if (!context.paid || context.fulfillment_mode !== 'generate_music_in_miniflux' || context.flow_execution || item.kie_task_id || item.music_url || !String(context.lyricText || '').trim()) continue;
     try {
       let connection = null;
       if (item.connection_id) {

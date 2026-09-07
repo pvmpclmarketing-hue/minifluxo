@@ -40,7 +40,17 @@ export async function POST(request) {
     const { data: charge } = await db.from('efi_pix_charges').select('*').eq('txid', txid).eq('status', 'pending').maybeSingle();
     if (!charge) { processed.push({ txid, ignored: true }); continue; }
     const now = new Date().toISOString();
-    const { data: claimed } = await db.from('efi_pix_charges').update({ status: 'paid', payment_payload: payment, paid_at: now, updated_at: now }).eq('txid', txid).eq('status', 'pending').select().maybeSingle();
+    // O payload recebido da Efí descreve somente o pagamento. Preserve os
+    // metadados criados junto com a cobrança (em especial
+    // `dispatch_like_asaas`), pois eles dizem se este Pix deve iniciar o
+    // fluxo de entrega desde o primeiro card ou apenas retomar um card Pix.
+    const originalPaymentPayload = charge.payment_payload || {};
+    const { data: claimed } = await db.from('efi_pix_charges').update({
+      status: 'paid',
+      payment_payload: { ...originalPaymentPayload, efi_payment: payment },
+      paid_at: now,
+      updated_at: now,
+    }).eq('txid', txid).eq('status', 'pending').select().maybeSingle();
     if (!claimed) { processed.push({ txid, duplicate: true }); continue; }
     const [{ data: lead }, { data: flow }, { data: connection }] = await Promise.all([
       db.from('leads').select('*').eq('id', claimed.lead_id).eq('owner_id', claimed.owner_id).eq('connection_id', claimed.connection_id).maybeSingle(),
@@ -59,7 +69,7 @@ export async function POST(request) {
       // devem iniciar o fluxo configurado em Disparos desde a entrada, exatamente
       // como um PAYMENT_APPROVED do Asaas. As cobranças antigas preservam o
       // comportamento de continuar após o card Pagamento confirmado.
-      const startsPaymentFlow = claimed.payment_payload?.dispatch_like_asaas === true;
+      const startsPaymentFlow = originalPaymentPayload.dispatch_like_asaas === true;
       const audios = Array.isArray(paidLead.order_context?.preview_audios) ? paidLead.order_context.preview_audios : [];
       const result = await executeFlow({ db, flow, lead: paidLead, connection, audios, resumeAfterId: startsPaymentFlow ? null : claimed.node_id });
       processed.push({ txid, ok: true, site_payment: sitePayment, result });
