@@ -6,6 +6,16 @@ import { credentialsFor, efiRequest, executeFlow } from '../../../flow-engine';
 export const runtime = 'nodejs';
 
 function cleanPhone(value) { return String(value || '').replace(/\D/g, ''); }
+function qrImageDataUrl(value) {
+  const image = String(value || '').trim();
+  if (!image) return null;
+  // A Efí devolve `imagemQrcode` já como data URL (normalmente SVG). Não
+  // prefixar novamente, pois `data:image/png;base64,data:image/svg...`
+  // produz uma imagem quebrada no navegador.
+  if (/^data:image\/[^,]+,data:image\//i.test(image)) return image.slice(image.indexOf(',') + 1);
+  if (/^data:image\//i.test(image)) return image;
+  return `data:image/png;base64,${image}`;
+}
 function siteSecretMatches(value) {
   const received = String(value || '');
   // Em instalações já existentes, reutilizamos o segredo privado que também
@@ -84,7 +94,7 @@ export async function POST(request) {
     const paymentNodeId = lead.order_context?.flow_execution?.payment_node_id;
     if (lead.status !== 'waiting_payment' || !paymentNodeId) return NextResponse.json({ error: 'O fluxo de pedido vindo do site precisa ter o card “Pagamento confirmado” antes da entrega.' }, { status: 409 });
     const { data: existing } = await db.from('efi_pix_charges').select('*').eq('lead_id', lead.id).eq('status', 'pending').order('created_at', { ascending: false }).limit(1).maybeSingle();
-    if (existing?.payment_payload?.pix_copia_e_cola) return NextResponse.json({ order_id: orderId, txid: existing.txid, pixPayload: existing.payment_payload.pix_copia_e_cola, qrCode: existing.payment_payload.qr_code || null, expiresAt: existing.expires_at });
+    if (existing?.payment_payload?.pix_copia_e_cola) return NextResponse.json({ order_id: orderId, txid: existing.txid, pixPayload: existing.payment_payload.pix_copia_e_cola, qrCode: qrImageDataUrl(existing.payment_payload.qr_code), expiresAt: existing.expires_at });
 
     const efi = (await credentialsFor(db, flow.id, flow.owner_id)).efi;
     if (!efi) return NextResponse.json({ error: 'Cadastre Client ID, Client Secret, certificado P12 e chave Pix da Efí na aba APIs do Minifluxo.' }, { status: 409 });
@@ -94,7 +104,7 @@ export async function POST(request) {
     let qrCode = null;
     if (charge.data?.loc?.id) {
       const qr = await efiRequest({ hostname: auth.hostname, path: `/v2/loc/${charge.data.loc.id}/qrcode`, method: 'GET', headers: { Authorization: `Bearer ${auth.token}` }, pfx: auth.pfx, passphrase: efi.certificatePassword });
-      if (qr.status >= 200 && qr.status < 300 && qr.data?.imagemQrcode) qrCode = `data:image/png;base64,${qr.data.imagemQrcode}`;
+      if (qr.status >= 200 && qr.status < 300 && qr.data?.imagemQrcode) qrCode = qrImageDataUrl(qr.data.imagemQrcode);
     }
     if (!qrCode) throw new Error('A Efí criou a cobrança, mas não retornou a imagem do QR Code. Tente gerar novamente.');
     const expiresAt = new Date(Date.now() + expiration * 1000).toISOString();
