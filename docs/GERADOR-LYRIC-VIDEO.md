@@ -21,6 +21,8 @@ O vídeo final tem as seguintes características:
 - Tamanho dinâmico: começa em 96 px e diminui somente quando a frase precisa caber em até três linhas.
 - Borda preta discreta de 2 px e sombra suave para preservar contraste sobre fundos claros ou texturizados.
 - Frases curtas e legíveis, em vez de uma linha interminável ou palavras isoladas espalhadas.
+- Zoom lento e contínuo no fundo, para evitar uma cena estática.
+- Entrada ascendente de 0,28 s em cada linha, sem atrasar a leitura da frase.
 
 ## Como configurar no fluxo
 
@@ -124,6 +126,12 @@ shadow: {
 ```
 
 O contorno é propositalmente fino. A função dele é separar a letra do fundo, sem parecer uma caixa atrás do texto.
+
+### Movimento
+
+O template usa movimento discreto em duas camadas. O fundo recebe `zoomInSlow` durante os 60 segundos; isso produz profundidade sem deslocar a moldura nem o visualizador. Cada linha de letra usa a animação `ascend`, vindo de baixo para cima em 0,28 segundo. A frase continua visível depois da entrada, até o fim do seu bloco sincronizado.
+
+Esse padrão é usado tanto pelo painel quanto pelo card do fluxo, pois os dois chamam a mesma função de montagem.
 
 ## Ciclo de execução
 
