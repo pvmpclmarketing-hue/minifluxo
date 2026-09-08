@@ -2,6 +2,7 @@ import https from 'https';
 import { createHash } from 'crypto';
 import { decryptSecret, hashSecret } from './connection-secrets';
 import { sendAudio, sendMenu, sendPixCopyButton, sendText } from './provider';
+import { submitLyricVideo } from '../../lib/lyric-video/submit';
 
 const valueAt=(data,path)=>path.split('.').reduce((value,key)=>value?.[key],data);
 const asText=value=>value==null?'':typeof value==='string'?value:JSON.stringify(value);
@@ -173,6 +174,30 @@ async function startKie(db,flow,lead,node,variables){
   }
 }
 
+async function startLyricVideo(db,flow,lead,node,audios){
+  const config=node.data?.config||{};
+  const context=lead.order_context||{};
+  const lyrics=String(context.lyricText||'').trim();
+  const audioUrl=String(audios[0]||'').trim();
+  if(!audioUrl)throw new Error('O card Gerar lyric video precisa ficar depois de Gerar música da Kie.ai. A primeira faixa ainda não está disponível.');
+  if(!lyrics)throw new Error('O lyric video não foi criado porque a letra deste pedido não está disponível.');
+
+  // O callback da Kie pode ser reenviado. Guardar o id por card torna a
+  // operação idempotente, sem criar dois vídeos para o mesmo pedido.
+  const saved=context.flow_data?.lyric_videos?.[node.id];
+  if(saved?.order_id)return {lead,lyricVideo:saved,alreadyStarted:true};
+  const sourceOrderId=context.sourceOrderId||lead.external_order_id||null;
+  const lyricVideo=await submitLyricVideo({
+    db, ownerId:flow.owner_id, audioUrl, lyrics, orderId:sourceOrderId,
+    introText:String(config.introText||'').trim()||null, theme:config.theme||'romantic_rose',
+    gptApiKey:(await credentialsFor(db,flow.id,flow.owner_id)).gpt||process.env.OPENAI_API_KEY,
+  });
+  const flowData={...(context.flow_data||{}),lyric_videos:{...(context.flow_data?.lyric_videos||{}),[node.id]:{order_id:lyricVideo.id,status:lyricVideo.status,audio_url:audioUrl,created_at:new Date().toISOString()}}};
+  const {data:updated,error}=await db.from('leads').update({order_context:{...context,flow_data:flowData,flow_execution:null},status:'in_progress',updated_at:new Date().toISOString()}).eq('id',lead.id).eq('owner_id',lead.owner_id).eq('connection_id',lead.connection_id).select().single();
+  if(error)throw error;
+  return {lead:updated,lyricVideo};
+}
+
 export async function executeFlow({db,flow,lead,connection,resumeAfterId=null,resumeHandle=null,audios=[]}){
   assertExecutionScope(flow,lead,connection);
   if(lead.status==='timed_out')return {completed:false,reason:'execution_timed_out'};
@@ -190,6 +215,7 @@ export async function executeFlow({db,flow,lead,connection,resumeAfterId=null,re
     if(kind==='paymentConfirmed'){if(!variables.paid){const context={...(currentLead.order_context||{}),flow_execution:{flow_id:flow.id,payment_node_id:node.id}};await db.from('leads').update({status:'waiting_payment',order_context:context,updated_at:new Date().toISOString()}).eq('id',currentLead.id).eq('owner_id',currentLead.owner_id).eq('connection_id',connection.id);return {waiting:true,reason:'payment_required'};}if(config.message){await sendText(connection,currentLead.phone,render(config.message,variables));}}
     if(kind==='condition'){const matched=conditionMatches(config,variables);node=nextNode(nodes,edges,node.id,matched?'true':'false');if(!node)return {completed:false,reason:matched?'condition_true_path_missing':'condition_false_path_missing'};continue;}
     if(kind==='kie'){if(readyAudios.length){node=nextNode(nodes,edges,node.id);continue;}if(!variables.paid){await db.from('leads').update({status:'waiting_pix',updated_at:new Date().toISOString()}).eq('id',currentLead.id);return {waiting:true,reason:'payment_required'};}return startKie(db,flow,currentLead,node,variables);}
+    if(kind==='lyricVideo'){const result=await startLyricVideo(db,flow,currentLead,node,readyAudios);currentLead=result.lead;variables=variablesFor(currentLead,{audios:readyAudios});}
     if(kind==='deliver'||kind==='previewDeliver'){
       if(!readyAudios.length)return {completed:false,reason:kind==='previewDeliver'?'preview_audio_not_ready':'audio_not_ready'};
       const intro=render(config.intro||(kind==='previewDeliver'?'Sua música está pronta! Vou enviar as duas faixas da sua prévia em áudio.':'Sua música está pronta! Vou enviar as duas faixas em áudio.'),variables);
