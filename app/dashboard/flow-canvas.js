@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { addEdge, Background, Controls, Handle, MarkerType, MiniMap, Position, ReactFlow, useEdgesState, useNodesState } from '@xyflow/react';
+import { createBrowserClient } from '@supabase/ssr';
 import '@xyflow/react/dist/style.css';
 import styles from './flow-canvas.module.css';
 
@@ -17,6 +18,7 @@ const blocks = {
   paymentConfirmed: { label:'Pagamento confirmado', icon:'✓', tone:'emerald', description:'Só continua depois da confirmação do pagamento', config:{ message:'Pagamento confirmado. Vou continuar seu pedido.' } },
   kie: { label:'Gerar musica', icon:'K', tone:'pink', description:'Envia pedido para Kie.ai', config:{ model:'Suno V5', style:'', instrumental:false, credential:'Chave do fluxo' } },
   lyricVideo: { label:'Gerar lyric video', icon:'▶', tone:'pink', description:'Usa a primeira música e a letra do pedido', config:{ theme:'romantic_rose', introText:'' } },
+  media: { label:'Enviar foto ou vídeo', icon:'▣', tone:'yellow', description:'Envia uma mídia pelo WhatsApp', config:{ mediaUrl:'', mediaType:'', fileName:'', caption:'', saveTo:'media' } },
   condition: { label:'Condicional', icon:'?', tone:'cyan', description:'Direciona conforme uma regra', config:{ field:'pix.validado', operator:'igual a', value:'true', match:'all' } },
   deliver: { label:'Entrega gerada', icon:'OK', tone:'teal', description:'Envia as 2 musicas geradas no fluxo', config:{ intro:'Sua musica esta pronta! Vou enviar as duas faixas em audio.', tracks:2 } },
   previewDeliver: { label:'Enviar musica da previa', icon:'PV', tone:'teal', description:'Entrega a musica que o cliente ouviu no site', config:{ intro:'Sua musica esta pronta! Vou enviar as duas faixas da sua previa em audio.', tracks:2 } }
@@ -60,6 +62,7 @@ function summary(data) {
   if(data.kind==='paymentConfirmed') return 'Aguarda webhook de pagamento aprovado';
   if(data.kind==='kie') return `Modelo: ${c.model || 'Suno'} | briefing do site`;
   if(data.kind==='lyricVideo') return `1ª faixa Kie + letra do site | ${c.theme || 'romantic_rose'}`;
+  if(data.kind==='media') return c.fileName ? `${c.mediaType==='video'?'Vídeo':'Foto'}: ${c.fileName}` : 'Carregue uma foto ou vídeo para enviar';
   if(data.kind==='wait') return `Espera resposta | salva: ${c.field || '-'}`;
   if(data.kind==='delay') return `Segue apos ${c.duration || 5} ${c.unit || 'minutos'}`;
   if(data.kind==='condition') return `${c.field || 'campo'} ${c.operator || '='} ${c.value || ''}`;
@@ -71,8 +74,23 @@ function Toggle({label, checked, onChange, hint}) { return <label className={sty
 function Field({label, children}) { return <label className={styles.field}><b>{label}</b>{children}</label>; }
 
 function ConfigModal({ node, credentials, onClose, onSave }) {
-  const [config,setConfig]=useState(node.data.config || {}); const [apiKey,setApiKey]=useState(''); const kind=node.data.kind;
+  const [config,setConfig]=useState(node.data.config || {}); const [apiKey,setApiKey]=useState(''); const [uploading,setUploading]=useState(false); const [uploadError,setUploadError]=useState(''); const kind=node.data.kind;
   const set=(key,value)=>setConfig(old=>({...old,[key]:value}));
+  const browserClient=()=>createBrowserClient(process.env.NEXT_PUBLIC_SUPABASE_URL,process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,{auth:{persistSession:true,autoRefreshToken:true}});
+  async function uploadMedia(file){
+    if(!file?.size)return;
+    if(!['image/jpeg','image/png','video/mp4'].includes(file.type))return setUploadError('Use JPG, PNG ou vídeo MP4.');
+    const maxBytes=file.type==='video/mp4'?16*1024*1024:5*1024*1024;
+    if(file.size>maxBytes)return setUploadError(file.type==='video/mp4'?'O vídeo deve ter no máximo 16 MB para envio pelo WhatsApp.':'A imagem deve ter no máximo 5 MB para envio pelo WhatsApp.');
+    setUploading(true);setUploadError('');
+    try{
+      const response=await fetch('/api/flow-assets',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({contentType:file.type})});
+      const prepared=await response.json();if(!response.ok)throw new Error(prepared.error||'Não foi possível preparar o upload.');
+      const {error}=await browserClient().storage.from('video-inputs').uploadToSignedUrl(prepared.path,prepared.token,file);if(error)throw error;
+      setConfig(old=>({...old,mediaUrl:`storage://video-inputs/${prepared.path}`,mediaType:prepared.mediaType,fileName:file.name}));
+    }catch(error){setUploadError(error instanceof Error?error.message:'Não foi possível enviar o arquivo.');}
+    finally{setUploading(false);}
+  }
   return <div className={styles.backdrop} onMouseDown={onClose}><section className={styles.modal} onMouseDown={e=>e.stopPropagation()}><header><span className={styles[node.data.tone]}>{node.data.icon}</span><div><h3>Editar {node.data.title}</h3><p>Configure esta etapa do fluxo.</p></div><button onClick={onClose}>X</button></header><div className={styles.modalBody}>
     {kind==='message' && <Field label="Conteudo da mensagem"><textarea value={config.message||''} onChange={e=>set('message',e.target.value)} placeholder="Use variaveis como {nome} ou {kie.audio_url}"/></Field>}
     {kind==='deliver' && <><p className={styles.note}>A Kie.ai gera duas faixas. Esta etapa envia cada arquivo MP3 separadamente no formato <b>audio</b> do WhatsApp, e nao como documento.</p><Field label="Mensagem antes dos audios"><textarea value={config.intro||''} onChange={e=>set('intro',e.target.value)} placeholder="Sua musica esta pronta!"/></Field><Field label="Quantidade de faixas"><input value="2 faixas (fixo - retorno da Kie.ai)" disabled/></Field></>}
@@ -86,6 +104,7 @@ function ConfigModal({ node, credentials, onClose, onSave }) {
     {kind==='paymentConfirmed' && <><p className={styles.note}>Este bloco funciona como uma barreira: o fluxo fica aguardando o webhook de pagamento aprovado da sua plataforma. Quando a confirmação chegar para este mesmo pedido e conta, a próxima etapa será executada automaticamente.</p><Field label="Mensagem após confirmar (opcional)"><textarea value={config.message||''} onChange={e=>set('message',e.target.value)} placeholder="Pagamento confirmado. Vou continuar seu pedido."/></Field></>}
     {kind==='kie' && <><Field label={`Chave API Kie.ai ${credentials.kieConfigured ? '(ja cadastrada - digite somente para trocar)' : ''}`}><input type="password" value={apiKey} onChange={e=>setApiKey(e.target.value)} placeholder={credentials.kieConfigured?'Nova chave opcional':'Cole sua chave da Kie.ai'} autoComplete="new-password"/></Field><p className={styles.note}>A chave e protegida no servidor. O prompt desta etapa e padrao: o sistema usa automaticamente o briefing recebido pelo site, por exemplo <code>{'{briefing_musica}'}</code>.</p><Field label="Modelo"><select value={config.model||'Suno V5'} onChange={e=>set('model',e.target.value)}><option>Suno V5</option><option>Suno V4.5</option></select></Field><Field label="Estilo padrao (opcional)"><input value={config.style||''} onChange={e=>set('style',e.target.value)} placeholder="Ex.: sertanejo romantico"/></Field><Toggle label="Modo instrumental" checked={config.instrumental} onChange={v=>set('instrumental',v)}/></>}
     {kind==='lyricVideo' && <><p className={styles.note}>Conecte este card depois de <b>Gerar música</b>. Ele usa automaticamente a primeira faixa que a Kie retornar e a letra original criada no site para este pedido. O render acontece em segundo plano e fica disponível no painel de vídeos.</p><Field label="Tema"><select value={config.theme||'romantic_rose'} onChange={e=>set('theme',e.target.value)}><option value="romantic_rose">Romântico Rosé</option><option value="night_love">Noite de Amor</option><option value="soft_gold">Dourado Suave</option></select></Field><Field label="Frase de abertura (opcional)"><input value={config.introText||''} maxLength="90" onChange={e=>set('introText',e.target.value)} placeholder="Uma música feita para você"/></Field><p className={styles.note}>Se a Kie reenviar o callback, o mesmo card não gera um segundo vídeo.</p></>}
+    {kind==='media' && <><p className={styles.note}>Carregue uma imagem ou um vídeo MP4 para enviar ao lead neste ponto do fluxo. O arquivo fica protegido na sua conta e recebe uma URL temporária somente na hora do envio.</p><Field label="Foto ou vídeo"><input type="file" accept="image/jpeg,image/png,video/mp4,.jpg,.jpeg,.png,.mp4" onChange={e=>uploadMedia(e.target.files?.[0])} disabled={uploading}/></Field><p className={styles.note}>{uploading?'Enviando arquivo...':config.fileName?`Arquivo selecionado: ${config.fileName}`:'Formatos: JPG, PNG (até 5 MB) ou MP4 (até 16 MB).'}</p>{uploadError&&<p className={styles.error}>{uploadError}</p>}<Field label="Legenda opcional"><textarea value={config.caption||''} onChange={e=>set('caption',e.target.value)} placeholder="Ex.: Olha esse presente que preparei para você 💖"/></Field><Field label="Campo para registrar o envio"><input value={config.saveTo||'media'} onChange={e=>set('saveTo',e.target.value)} placeholder="media"/></Field></>}
     {kind==='condition' && <><Field label="Regra logica"><select value={config.match||'all'} onChange={e=>set('match',e.target.value)}><option value="all">Todas as condicoes (E)</option><option value="any">Qualquer condicao (OU)</option></select></Field><Field label="Campo / variavel"><input value={config.field||''} onChange={e=>set('field',e.target.value)} placeholder="pix.validado"/></Field><div className={styles.two}><Field label="Operador"><select value={config.operator||'igual a'} onChange={e=>set('operator',e.target.value)}><option>igual a</option><option>contem</option><option>existe</option><option>maior que</option></select></Field><Field label="Valor"><input value={config.value||''} onChange={e=>set('value',e.target.value)} placeholder="true"/></Field></div></>}
     {kind==='start' && <Field label="Gatilho"><select value={config.trigger||'manual'} onChange={e=>set('trigger',e.target.value)}><option value="manual">Manual</option><option value="site">Pedido vindo do site</option><option value="payment">Pagamento aprovado</option></select></Field>}
   </div><div className={styles.modalFooter}><button className={styles.secondary} onClick={onClose}>Fechar</button><button className={styles.primary} onClick={()=>onSave(config,kind==='ai'||kind==='messageAgent'?{gptKey:apiKey}:kind==='kie'?{kieKey:apiKey}:{})}>Salvar configuracao</button></div></section></div>;

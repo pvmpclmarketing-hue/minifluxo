@@ -1,7 +1,7 @@
 import https from 'https';
 import { createHash } from 'crypto';
 import { decryptSecret, hashSecret } from './connection-secrets';
-import { sendAudio, sendMenu, sendPixCopyButton, sendText } from './provider';
+import { sendAudio, sendMedia, sendMenu, sendPixCopyButton, sendText } from './provider';
 import { submitLyricVideo } from '../../lib/lyric-video/submit';
 
 const valueAt=(data,path)=>path.split('.').reduce((value,key)=>value?.[key],data);
@@ -198,6 +198,25 @@ async function startLyricVideo(db,flow,lead,node,audios){
   return {lead:updated,lyricVideo};
 }
 
+async function sendFlowMedia(db,flow,lead,connection,node,variables){
+  const config=node.data?.config||{};
+  const type=['image','video'].includes(config.mediaType)?config.mediaType:null;
+  const storageUrl=String(config.mediaUrl||'').trim();
+  const prefix=`storage://video-inputs/${flow.owner_id}/flow-media/`;
+  if(!type||!storageUrl.startsWith(prefix))throw new Error('Envie uma foto ou vídeo neste card antes de salvar o fluxo.');
+  const path=storageUrl.slice('storage://video-inputs/'.length);
+  const {data,error}=await db.storage.from('video-inputs').createSignedUrl(path,60*60*12);
+  if(error||!data?.signedUrl)throw error||new Error('Não foi possível acessar a mídia deste card.');
+  const caption=render(config.caption||'',variables);
+  await sendMedia(connection,lead.phone,type,data.signedUrl,caption);
+  const context=lead.order_context||{};
+  const saveTo=/^[a-zA-Z0-9_.]+$/.test(config.saveTo||'media')?config.saveTo||'media':'media';
+  const flowData=setAt(context.flow_data,saveTo,{type,file_name:String(config.fileName||''),sent_at:new Date().toISOString()});
+  const {data:updated,error:updateError}=await db.from('leads').update({order_context:{...context,flow_data:flowData,flow_execution:null},status:'in_progress',updated_at:new Date().toISOString()}).eq('id',lead.id).eq('owner_id',lead.owner_id).eq('connection_id',connection.id).select().single();
+  if(updateError)throw updateError;
+  return updated;
+}
+
 export async function executeFlow({db,flow,lead,connection,resumeAfterId=null,resumeHandle=null,audios=[]}){
   assertExecutionScope(flow,lead,connection);
   if(lead.status==='timed_out')return {completed:false,reason:'execution_timed_out'};
@@ -216,6 +235,7 @@ export async function executeFlow({db,flow,lead,connection,resumeAfterId=null,re
     if(kind==='condition'){const matched=conditionMatches(config,variables);node=nextNode(nodes,edges,node.id,matched?'true':'false');if(!node)return {completed:false,reason:matched?'condition_true_path_missing':'condition_false_path_missing'};continue;}
     if(kind==='kie'){if(readyAudios.length){node=nextNode(nodes,edges,node.id);continue;}if(!variables.paid){await db.from('leads').update({status:'waiting_pix',updated_at:new Date().toISOString()}).eq('id',currentLead.id);return {waiting:true,reason:'payment_required'};}return startKie(db,flow,currentLead,node,variables);}
     if(kind==='lyricVideo'){const result=await startLyricVideo(db,flow,currentLead,node,readyAudios);currentLead=result.lead;variables=variablesFor(currentLead,{audios:readyAudios});}
+    if(kind==='media'){currentLead=await sendFlowMedia(db,flow,currentLead,connection,node,variables);variables=variablesFor(currentLead,{audios:readyAudios});}
     if(kind==='deliver'||kind==='previewDeliver'){
       if(!readyAudios.length)return {completed:false,reason:kind==='previewDeliver'?'preview_audio_not_ready':'audio_not_ready'};
       const intro=render(config.intro||(kind==='previewDeliver'?'Sua música está pronta! Vou enviar as duas faixas da sua prévia em áudio.':'Sua música está pronta! Vou enviar as duas faixas em áudio.'),variables);

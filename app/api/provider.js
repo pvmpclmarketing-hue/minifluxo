@@ -1,13 +1,13 @@
 import { adminClient } from './supabase';
 import { tokenForConnection, uazCall } from './uazapi';
 
-async function uazAudioFile(audioUrl){
-  const response=await fetch(audioUrl);if(!response.ok)throw new Error(`Não foi possível baixar o áudio gerado: ${response.status}`);
-  const contentType=response.headers.get('content-type')?.split(';')[0]||'audio/mpeg';const bytes=Buffer.from(await response.arrayBuffer());
-  if(!bytes.length)throw new Error('O arquivo de áudio gerado está vazio.');
-  if(!contentType.startsWith('audio/'))throw new Error(`A Kie.ai devolveu mídia inválida no lugar do áudio (${contentType}).`);
-  if(bytes.length>18*1024*1024)throw new Error('O arquivo de áudio excede o limite seguro de envio.');
-  return `data:${contentType};base64,${bytes.toString('base64')}`;
+async function uazMediaFile(mediaUrl,expectedType,label,maxBytes=16*1024*1024){
+  const response=await fetch(mediaUrl);if(!response.ok)throw new Error(`Não foi possível baixar a ${label}: ${response.status}`);
+  const contentType=response.headers.get('content-type')?.split(';')[0]||'';const bytes=Buffer.from(await response.arrayBuffer());
+  if(!bytes.length)throw new Error(`A ${label} está vazia.`);
+  if(!contentType.startsWith(`${expectedType}/`))throw new Error(`O arquivo enviado não é uma ${label} válida (${contentType||'tipo desconhecido'}).`);
+  if(bytes.length>maxBytes)throw new Error(`A ${label} excede o limite seguro de envio.`);
+  return { file:`data:${contentType};base64,${bytes.toString('base64')}`, contentType };
 }
 
 function uazPhoneCandidates(phone){
@@ -60,6 +60,18 @@ export async function sendPixCopyButton(connection,phone,code,amount){
 export async function sendAudio(connection,phone,audioUrl,caption=''){
   if(!connection)throw new Error('Conecte um WhatsApp antes de enviar o áudio.');
   if(connection.provider==='meta'){const response=await fetch(`https://graph.facebook.com/${process.env.META_API_VERSION||'v22.0'}/${process.env.META_PHONE_NUMBER_ID}/messages`,{method:'POST',headers:{Authorization:`Bearer ${process.env.META_ACCESS_TOKEN}`,'Content-Type':'application/json'},body:JSON.stringify({messaging_product:'whatsapp',to:phone,type:'audio',audio:{link:audioUrl}})});if(!response.ok)throw new Error(`Meta: ${response.status} ${await response.text()}`);return response.json();}
-  const file=await uazAudioFile(audioUrl);
-  return uazSendWithPhoneFallback(connection,phone,'/send/media',{type:'audio',file,mimetype:'audio/mpeg',text:caption});
+  const media=await uazMediaFile(audioUrl,'audio','áudio',18*1024*1024);
+  return uazSendWithPhoneFallback(connection,phone,'/send/media',{type:'audio',file:media.file,mimetype:media.contentType,text:caption});
+}
+
+export async function sendMedia(connection,phone,type,mediaUrl,caption=''){
+  if(!connection)throw new Error('Conecte um WhatsApp antes de enviar a mídia.');
+  if(!['image','video'].includes(type))throw new Error('Tipo de mídia inválido.');
+  if(connection.provider==='meta'){
+    const response=await fetch(`https://graph.facebook.com/${process.env.META_API_VERSION||'v22.0'}/${process.env.META_PHONE_NUMBER_ID}/messages`,{method:'POST',headers:{Authorization:`Bearer ${process.env.META_ACCESS_TOKEN}`,'Content-Type':'application/json'},body:JSON.stringify({messaging_product:'whatsapp',to:phone,type,[type]:{link:mediaUrl,...(caption?{caption}:{})}})});
+    if(!response.ok)throw new Error(`Meta: ${response.status} ${await response.text()}`);
+    return response.json();
+  }
+  const media=await uazMediaFile(mediaUrl,type,type==='image'?'imagem':'vídeo',type==='image'?5*1024*1024:16*1024*1024);
+  return uazSendWithPhoneFallback(connection,phone,'/send/media',{type,file:media.file,mimetype:media.contentType,text:caption});
 }
