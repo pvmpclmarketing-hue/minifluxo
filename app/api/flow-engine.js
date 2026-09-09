@@ -267,7 +267,16 @@ export async function recoverKieGeneration({db,lead}){
     if(task.status==='GENERATE_AUDIO_FAILED'&&Number(recovery.restart_attempts||0)<1){
       const node=(Array.isArray(flow.nodes)?flow.nodes:[]).find(item=>item.id===execution.kie_node_id&&item.data?.kind==='kie');
       if(!node)return {waiting:true,reason:'kie_node_missing'};
-      const restartedLead={...lead,order_context:{...(lead.order_context||{}),kie_recovery:{...recovery,restart_attempts:Number(recovery.restart_attempts||0)+1,restarted_at:new Date().toISOString(),previous_task_id:lead.kie_task_id}}};
+      // startKie deliberately claims only an in_progress lead with no task id.
+      // The old recovery path called it while the lead was still generating,
+      // so it returned generation_already_claimed and no new task was created.
+      // Resetting conditionally also prevents concurrent cron runs from
+      // submitting the same music twice.
+      const restartedContext={...(lead.order_context||{}),kie_recovery:{...recovery,restart_attempts:Number(recovery.restart_attempts||0)+1,restarted_at:new Date().toISOString(),previous_task_id:lead.kie_task_id}};
+      const {data:resetLead,error:resetError}=await db.from('leads').update({status:'in_progress',kie_task_id:null,order_context:restartedContext,updated_at:new Date().toISOString()}).eq('id',lead.id).eq('owner_id',lead.owner_id).eq('status','generating').eq('kie_task_id',lead.kie_task_id).select().maybeSingle();
+      if(resetError)throw resetError;
+      if(!resetLead)return {waiting:true,reason:'restart_already_claimed'};
+      const restartedLead={...resetLead,order_context:restartedContext};
       const restarted=await startKie(db,flow,restartedLead,node,variablesFor(restartedLead));
       console.info('[kie recovery] generation restarted',{lead_id:lead.id,previous_task_id:lead.kie_task_id,new_task_id:restarted.taskId});
       return {waiting:true,restarted:true,taskId:restarted.taskId};
