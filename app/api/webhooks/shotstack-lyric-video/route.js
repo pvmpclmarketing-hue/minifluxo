@@ -107,8 +107,14 @@ export async function POST(request) {
     if (!orderId || !token || token !== process.env.SHOTSTACK_WEBHOOK_SECRET) return NextResponse.json({ error: 'Não autorizado.' }, { status: 401 });
     if (!process.env.SHOTSTACK_API_KEY) return NextResponse.json({ error: 'Integração indisponível.' }, { status: 503 });
     const payload = await request.json();
-    const renderId = payload?.response?.id || payload?.id;
+    // A Shotstack pode chamar este endpoint com um evento "edit" (id é o
+    // render) ou "serve" (id é o asset hospedado e render é o id correto).
+    // Usar o id do asset fazia o callback válido retornar 403 e impedia a
+    // entrega do vídeo no WhatsApp.
+    const callbackType = String(payload?.type || '').toLowerCase();
+    const renderId = payload?.response?.id || (callbackType === 'serve' ? payload?.render : payload?.id);
     if (!renderId) return NextResponse.json({ error: 'Notificação sem render id.' }, { status: 400 });
+    console.info('[lyric-video callback] received', { order_id: orderId, type: callbackType || 'unknown', event_id: payload?.id || null, render_id: renderId, status: payload?.status || null });
     const db = adminClient();
     const { data: order, error: orderError } = await db.from('lyric_video_orders').select('id,owner_id,order_id,status,shotstack_render_id').eq('id', orderId).maybeSingle();
     if (orderError || !order) return NextResponse.json({ error: 'Pedido não encontrado.' }, { status: 404 });
