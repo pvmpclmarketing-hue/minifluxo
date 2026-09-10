@@ -10,6 +10,10 @@ const render=(text,variables)=>String(text||'').replace(/\{([^}]+)\}/g,(_,path)=
 const nextNode=(nodes,edges,nodeId,sourceHandle=null)=>{const matches=edges.filter(edge=>edge.source===nodeId);const selected=sourceHandle?matches.find(edge=>edge.sourceHandle===sourceHandle):matches.find(edge=>!edge.sourceHandle)||matches[0];return nodes.find(node=>node.id===selected?.target)||null;};
 const modelName=value=>({ 'Suno V5':'V5','Suno V4.5':'V4_5' }[value]||value||'V5');
 const delayMilliseconds=config=>{const amount=Math.max(1,Number(config.duration)||1);const multiplier={minutos:60000,horas:3600000,dias:86400000}[config.unit]||60000;return amount*multiplier;};
+const KIE_RETRY_DELAYS_MS=[2*60*1000,5*60*1000];
+const KIE_TERMINAL_STATUSES=new Set(['SENSITIVE_WORD_ERROR']);
+const kieFailureMessage=(task,fallback='A Kie.ai não conseguiu gerar o áudio desta música.')=>String(task?.errorMessage||task?.message||fallback).trim().slice(0,500);
+const kieRetryAt=attempts=>new Date(Date.now()+(KIE_RETRY_DELAYS_MS[Math.min(attempts,KIE_RETRY_DELAYS_MS.length-1)])).toISOString();
 function assertExecutionScope(flow,lead,connection){
   if(!flow?.owner_id||!lead?.owner_id||!connection?.owner_id||!lead?.connection_id||flow.owner_id!==lead.owner_id||connection.owner_id!==lead.owner_id||connection.id!==lead.connection_id)throw new Error('Execução bloqueada: fluxo, conversa e WhatsApp não pertencem à mesma conta.');
 }
@@ -269,9 +273,12 @@ async function latestKieTask(db,flow,lead){
   const key=(await credentialsFor(db,flow.id,flow.owner_id)).kie;if(!key)throw new Error('A chave Kie.ai desta conta não está configurada.');
   const response=await fetch(`${String(process.env.KIE_API_BASE_URL||'https://api.kie.ai').replace(/\/$/,'')}/api/v1/generate/record-info?taskId=${encodeURIComponent(lead.kie_task_id||'')}`,{headers:{Authorization:`Bearer ${key}`}});
   const payload=await response.json().catch(()=>({}));if(!response.ok)throw new Error(`Kie.ai: ${response.status} ${payload.msg||'Não foi possível consultar a música.'}`);
-  const status=payload.data?.status||payload.data?.taskStatus||payload.data?.response?.status||payload.status||null;
-  console.info('[kie recovery] provider status',{task_id:lead.kie_task_id,api_code:payload.code??null,status,message:payload.msg||payload.message||null});
-  return {status:String(status||''),audios:audioUrls(payload.data?.response?.sunoData||payload).slice(0,2)};
+  const details=payload.data?.response||payload.data||{};
+  const status=payload.data?.status||payload.data?.taskStatus||details.status||payload.status||null;
+  const errorCode=details.errorCode??payload.data?.errorCode??payload.errorCode??payload.code??null;
+  const errorMessage=details.errorMessage||payload.data?.errorMessage||details.message||payload.msg||payload.message||null;
+  console.info('[kie recovery] provider status',{task_id:lead.kie_task_id,api_code:payload.code??null,status,error_code:errorCode,message:errorMessage});
+  return {status:String(status||''),audios:audioUrls(payload.data?.response?.sunoData||payload).slice(0,2),errorCode,errorMessage};
 }
 async function latestKieAudios(db,flow,lead){
   return (await latestKieTask(db,flow,lead)).audios;
@@ -290,7 +297,31 @@ export async function recoverKieGeneration({db,lead}){
   console.info('[kie recovery] task checked',{lead_id:lead.id,task_id:lead.kie_task_id,audio_count:audios.length});
   if(audios.length<2){
     const recovery=lead.order_context?.kie_recovery||{};
-    if(task.status==='GENERATE_AUDIO_FAILED'&&Number(recovery.restart_attempts||0)<1){
+    const retryAttempts=Math.max(0,Number(recovery.restart_attempts||0));
+    const startedAt=Date.parse(lead.order_context?.generation?.started_at||lead.updated_at||'');
+    const maxWaitMs=Math.max(5,Number(process.env.KIE_GENERATION_MAX_WAIT_MINUTES||20))*60*1000;
+    const timedOut=Number.isFinite(startedAt)&&Date.now()-startedAt>maxWaitMs;
+    const providerRejected=[400,413].includes(Number(task.errorCode));
+    const failed=KIE_TERMINAL_STATUSES.has(task.status)||providerRejected||task.status==='GENERATE_AUDIO_FAILED'||timedOut;
+    if(failed){
+      const terminal=KIE_TERMINAL_STATUSES.has(task.status)||providerRejected;
+      const failure={...recovery,last_provider_status:task.status||'UNKNOWN',last_error_code:task.errorCode??null,last_error_message:kieFailureMessage(task,timedOut?'A geração excedeu o tempo máximo de espera.':undefined),failed_task_id:lead.kie_task_id,failed_at:new Date().toISOString()};
+      if(terminal||retryAttempts>=KIE_RETRY_DELAYS_MS.length){
+        const terminalContext={...(lead.order_context||{}),generation:{...(lead.order_context?.generation||{}),failed_at:new Date().toISOString(),error:failure.last_error_message},kie_recovery:{...failure,next_retry_at:null},flow_execution:{...execution,state:'generation_failed'}};
+        const {data:stopped,error:stopError}=await db.from('leads').update({status:'generation_failed',order_context:terminalContext,updated_at:new Date().toISOString()}).eq('id',lead.id).eq('owner_id',lead.owner_id).eq('status','generating').eq('kie_task_id',lead.kie_task_id).select().maybeSingle();
+        if(stopError)throw stopError;
+        if(stopped)console.error('[kie recovery] generation permanently failed',{lead_id:lead.id,task_id:lead.kie_task_id,status:task.status,error_code:task.errorCode});
+        return {waiting:false,failed:true,reason:terminal?'kie_permanent_failure':'kie_retry_limit_reached'};
+      }
+      const nextRetryAt=String(recovery.next_retry_at||'');
+      if(!nextRetryAt||Date.parse(nextRetryAt)<=Date.now()){
+        if(!nextRetryAt){
+          const scheduledContext={...(lead.order_context||{}),kie_recovery:{...failure,next_retry_at:kieRetryAt(retryAttempts)}};
+          const {error:scheduleError}=await db.from('leads').update({order_context:scheduledContext,updated_at:new Date().toISOString()}).eq('id',lead.id).eq('owner_id',lead.owner_id).eq('status','generating').eq('kie_task_id',lead.kie_task_id);
+          if(scheduleError)throw scheduleError;
+          console.warn('[kie recovery] retry scheduled',{lead_id:lead.id,task_id:lead.kie_task_id,attempt:retryAttempts+1,next_retry_at:scheduledContext.kie_recovery.next_retry_at,status:task.status});
+          return {waiting:true,reason:'kie_retry_scheduled'};
+        }
       const node=(Array.isArray(flow.nodes)?flow.nodes:[]).find(item=>item.id===execution.kie_node_id&&item.data?.kind==='kie');
       if(!node)return {waiting:true,reason:'kie_node_missing'};
       // startKie deliberately claims only an in_progress lead with no task id.
@@ -298,7 +329,7 @@ export async function recoverKieGeneration({db,lead}){
       // so it returned generation_already_claimed and no new task was created.
       // Resetting conditionally also prevents concurrent cron runs from
       // submitting the same music twice.
-      const restartedContext={...(lead.order_context||{}),kie_recovery:{...recovery,restart_attempts:Number(recovery.restart_attempts||0)+1,restarted_at:new Date().toISOString(),previous_task_id:lead.kie_task_id}};
+      const restartedContext={...(lead.order_context||{}),kie_recovery:{...failure,restart_attempts:retryAttempts+1,restarted_at:new Date().toISOString(),previous_task_id:lead.kie_task_id,next_retry_at:null}};
       const {data:resetLead,error:resetError}=await db.from('leads').update({status:'in_progress',kie_task_id:null,order_context:restartedContext,updated_at:new Date().toISOString()}).eq('id',lead.id).eq('owner_id',lead.owner_id).eq('status','generating').eq('kie_task_id',lead.kie_task_id).select().maybeSingle();
       if(resetError)throw resetError;
       if(!resetLead)return {waiting:true,reason:'restart_already_claimed'};
@@ -306,6 +337,8 @@ export async function recoverKieGeneration({db,lead}){
       const restarted=await startKie(db,flow,restartedLead,node,variablesFor(restartedLead));
       console.info('[kie recovery] generation restarted',{lead_id:lead.id,previous_task_id:lead.kie_task_id,new_task_id:restarted.taskId});
       return {waiting:true,restarted:true,taskId:restarted.taskId};
+      }
+      return {waiting:true,reason:'kie_retry_waiting'};
     }
     return {waiting:true,reason:'kie_not_ready'};
   }

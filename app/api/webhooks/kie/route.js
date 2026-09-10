@@ -35,6 +35,19 @@ export async function POST(request) {
     const { data: lead } = await db.from('leads').select('*').eq('kie_task_id', taskId).eq('status', 'generating').maybeSingle();
     console.info('[kie webhook] callback received', { task_id: taskId, stage, audio_count: urls.length, lead_found: !!lead });
     if (!lead) return NextResponse.json({ received: true, already_processed: true });
+    const failedGeneration = stage.includes('error') || stage.includes('failed') || Number(body.code) >= 400;
+    if (failedGeneration) {
+      const details = body.data?.response || body.data || {};
+      const errorMessage = String(details.errorMessage || body.data?.errorMessage || body.msg || body.message || 'A Kie.ai não conseguiu gerar o áudio.').slice(0, 500);
+      const recovery = lead.order_context?.kie_recovery || {};
+      const { error } = await db.from('leads').update({
+        order_context: { ...(lead.order_context || {}), kie_recovery: { ...recovery, last_provider_status: stage || 'FAILED', last_error_code: details.errorCode ?? body.data?.errorCode ?? body.code ?? null, last_error_message: errorMessage, failed_task_id: taskId, failed_at: new Date().toISOString() } },
+        updated_at: new Date().toISOString(),
+      }).eq('id', lead.id).eq('owner_id', lead.owner_id).eq('kie_task_id', taskId).eq('status', 'generating');
+      if (error) throw error;
+      console.warn('[kie webhook] generation failed; recovery will retry', { task_id: taskId, lead_id: lead.id, code: body.code ?? null });
+      return NextResponse.json({ received: true, failed: true, recovery_scheduled: true });
+    }
     const generationComplete = stage.includes('complete') || stage.includes('success');
     if (!generationComplete) return NextResponse.json({ received: true, waiting: true, reason: 'generation_not_complete' });
     if (urls.length < 2) return NextResponse.json({ received: true, waiting: true, reason: 'two_audio_urls_required' });
