@@ -299,7 +299,10 @@ export async function recoverKieGeneration({db,lead}){
     const recovery=lead.order_context?.kie_recovery||{};
     const retryAttempts=Math.max(0,Number(recovery.restart_attempts||0));
     const startedAt=Date.parse(lead.order_context?.generation?.started_at||lead.updated_at||'');
-    const maxWaitMs=Math.max(5,Number(process.env.KIE_GENERATION_MAX_WAIT_MINUTES||20))*60*1000;
+    // Gerações normais costumam concluir em poucos minutos. Após dez minutos
+    // sem áudio, tratamos a tarefa como perdida e entramos no mesmo ciclo de
+    // recuperação, em vez de manter o cliente em "Gerando música".
+    const maxWaitMs=Math.max(5,Number(process.env.KIE_GENERATION_MAX_WAIT_MINUTES||10))*60*1000;
     const timedOut=Number.isFinite(startedAt)&&Date.now()-startedAt>maxWaitMs;
     const providerRejected=[400,413].includes(Number(task.errorCode));
     const failed=KIE_TERMINAL_STATUSES.has(task.status)||providerRejected||task.status==='GENERATE_AUDIO_FAILED'||timedOut;
