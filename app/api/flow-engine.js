@@ -221,7 +221,12 @@ export async function executeFlow({db,flow,lead,connection,resumeAfterId=null,re
   assertExecutionScope(flow,lead,connection);
   if(lead.status==='timed_out')return {completed:false,reason:'execution_timed_out'};
   const nodes=Array.isArray(flow.nodes)?flow.nodes:[];const edges=Array.isArray(flow.edges)?flow.edges:[];if(!nodes.length)return {completed:false,reason:'empty_flow'};
-  const readyAudios=Array.isArray(audios)&&audios.length?audios:(Array.isArray(lead.order_context?.preview_audios)?lead.order_context.preview_audios:[]);
+  // A retomada por Pix chega sem o argumento `audios`. Para músicas geradas
+  // pela Kie, elas já foram persistidas no contexto pelo callback; usá-las
+  // aqui evita que o card de lyric video pare após o pagamento confirmado.
+  const previewAudios=Array.isArray(lead.order_context?.preview_audios)?lead.order_context.preview_audios.filter(Boolean):[];
+  const kieAudios=Array.isArray(lead.order_context?.kie_audios)?lead.order_context.kie_audios.filter(Boolean):[];
+  const readyAudios=Array.isArray(audios)&&audios.length?audios.filter(Boolean):(previewAudios.length?previewAudios:kieAudios);
   let node=resumeAfterId?nextNode(nodes,edges,resumeAfterId,resumeHandle):(nodes.find(item=>item.data?.kind==='start')||nodes[0]);if(node?.data?.kind==='start')node=nextNode(nodes,edges,node.id);let currentLead=lead;let variables=variablesFor(currentLead,{audios:readyAudios});
   for(let steps=0;node&&steps<50;steps+=1){const kind=node.data?.kind;const config=node.data?.config||{};
     if(kind==='message'){const text=render(config.message,variables);if(text)await sendText(connection,currentLead.phone,text);}
