@@ -72,6 +72,6 @@ export async function sendMedia(connection,phone,type,mediaUrl,caption=''){
     if(!response.ok)throw new Error(`Meta: ${response.status} ${await response.text()}`);
     return response.json();
   }
-  const media=await uazMediaFile(mediaUrl,type,type==='image'?'imagem':'vídeo',type==='image'?5*1024*1024:16*1024*1024);
+  const media=await uazMediaFile(mediaUrl,type,type==='image'?'imagem':'vídeo',type==='image'?5*1024*1024:50*1024*1024);
   return uazSendWithPhoneFallback(connection,phone,'/send/media',{type,file:media.file,mimetype:media.contentType,text:caption});
 }
