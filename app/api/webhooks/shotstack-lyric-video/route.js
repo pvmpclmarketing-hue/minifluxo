@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { adminClient } from '../../supabase';
 import { sendMedia } from '../../provider';
+import { executeFlow } from '../../flow-engine';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -63,10 +64,11 @@ async function completeAndDeliverVideo(db, order, outputUrl) {
 
     await sendMedia(connection, lead.phone, 'video', outputUrl, '💖 Seu lyric video está pronto!');
 
-    const { error: leadUpdateError } = await db.from('leads').update({
+    const { data:deliveredLead, error: leadUpdateError } = await db.from('leads').update({
       order_context: markVideoAsSent(lead.order_context || {}, order.id, outputUrl),
+      status: 'in_progress',
       updated_at: new Date().toISOString(),
-    }).eq('id', lead.id).eq('owner_id', lead.owner_id).eq('connection_id', lead.connection_id);
+    }).eq('id', lead.id).eq('owner_id', lead.owner_id).eq('connection_id', lead.connection_id).select().single();
     if (leadUpdateError) throw leadUpdateError;
 
     const { error: completeError } = await db.from('lyric_video_orders')
@@ -76,7 +78,15 @@ async function completeAndDeliverVideo(db, order, outputUrl) {
     if (completeError) throw completeError;
 
     console.info('[lyric-video delivery] WhatsApp video sent', { lyric_video_order_id: order.id, lead_id: lead.id });
-    return { delivery: 'sent' };
+    const execution = deliveredLead.order_context?.flow_execution;
+    if (execution?.flow_id && execution?.lyric_video_node_id) {
+      const { data:flow, error:flowError } = await db.from('flows').select('*').eq('id', execution.flow_id).eq('owner_id', deliveredLead.owner_id).eq('status', 'active').maybeSingle();
+      if (flowError) throw flowError;
+      if (!flow) throw new Error('O fluxo que deve continuar após o lyric video não está ativo.');
+      const audios = Array.isArray(deliveredLead.order_context?.kie_audios) ? deliveredLead.order_context.kie_audios : deliveredLead.order_context?.preview_audios || [];
+      await executeFlow({ db, flow, lead: deliveredLead, connection, resumeAfterId: execution.lyric_video_node_id, audios });
+    }
+    return { delivery: 'sent_and_flow_resumed' };
   } catch (error) {
     await db.from('lyric_video_orders').update({
       status: 'rendering',
