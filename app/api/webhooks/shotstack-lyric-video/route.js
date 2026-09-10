@@ -104,7 +104,11 @@ export async function POST(request) {
     const { searchParams } = new URL(request.url);
     const orderId = searchParams.get('order');
     const token = searchParams.get('token');
-    if (!orderId || !token || token !== process.env.SHOTSTACK_WEBHOOK_SECRET) return NextResponse.json({ error: 'Não autorizado.' }, { status: 401 });
+    // O cron interno pode recuperar um callback perdido usando seu próprio
+    // segredo. O segredo da Shotstack continua sendo aceito para webhooks
+    // externos; nenhum token vazio é considerado válido.
+    const validTokens = [process.env.SHOTSTACK_WEBHOOK_SECRET, process.env.DELAY_CRON_SECRET].filter(Boolean);
+    if (!orderId || !token || !validTokens.includes(token)) return NextResponse.json({ error: 'Não autorizado.' }, { status: 401 });
     if (!process.env.SHOTSTACK_API_KEY) return NextResponse.json({ error: 'Integração indisponível.' }, { status: 503 });
     const payload = await request.json();
     // A Shotstack pode chamar este endpoint com um evento "edit" (id é o

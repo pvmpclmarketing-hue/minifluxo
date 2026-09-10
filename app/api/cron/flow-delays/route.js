@@ -123,7 +123,8 @@ export async function POST(request) {
   if (pendingLyricVideosError) return NextResponse.json({ error: pendingLyricVideosError.message }, { status: 500 });
   for (const item of pendingLyricVideos || []) {
     const execution = item.order_context?.flow_execution;
-    if (!execution?.lyric_video_order_id || !process.env.SHOTSTACK_API_KEY || !process.env.SHOTSTACK_WEBHOOK_SECRET) continue;
+    const callbackToken = process.env.SHOTSTACK_WEBHOOK_SECRET || process.env.DELAY_CRON_SECRET;
+    if (!execution?.lyric_video_order_id || !process.env.SHOTSTACK_API_KEY || !callbackToken) continue;
     try {
       const { data: lyricOrder, error: lyricOrderError } = await db.from('lyric_video_orders').select('id,shotstack_render_id,status').eq('id', execution.lyric_video_order_id).eq('owner_id', item.owner_id).maybeSingle();
       if (lyricOrderError) throw lyricOrderError;
@@ -136,7 +137,7 @@ export async function POST(request) {
       if (String(render.status || '').toLowerCase() !== 'done') continue;
       const callbackUrl = new URL('/api/webhooks/shotstack-lyric-video', request.url);
       callbackUrl.searchParams.set('order', lyricOrder.id);
-      callbackUrl.searchParams.set('token', process.env.SHOTSTACK_WEBHOOK_SECRET);
+      callbackUrl.searchParams.set('token', callbackToken);
       const callbackResponse = await fetch(callbackUrl, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ type: 'edit', id: lyricOrder.shotstack_render_id, status: 'done' }) });
       if (!callbackResponse.ok) throw new Error(`A recuperação do lyric video falhou (${callbackResponse.status}).`);
       recoveredLyricVideos += 1;
