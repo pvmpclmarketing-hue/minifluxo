@@ -139,6 +139,10 @@ export async function POST(request) {
     if (error) throw error;
     return NextResponse.json({ ok: true });
   } catch (error) {
+    console.error('[lyric-video callback] failed', {
+      error: error?.message || String(error),
+      stack: error?.stack || null,
+    });
     return NextResponse.json({ error: error.message || 'Falha ao processar callback.' }, { status: 500 });
   }
 }
