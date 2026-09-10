@@ -10,7 +10,7 @@ export async function POST(request) {
   const timeoutAt = new Date(now - timeoutHours * 60 * 60 * 1000).toISOString();
   // Estas etapas deveriam avançar sem uma nova ação do cliente. Se ficarem presas,
   // encerramos somente esta execução para que ela nunca volte a enviar mensagens depois.
-  const { data: expired, error: expireError } = await db.from('leads').update({ status: 'timed_out', updated_at: new Date().toISOString() }).in('status', ['in_progress', 'generating', 'delivering', 'delivery_failed', 'waiting_response', 'waiting_payment', 'waiting_pix', 'waiting_delay']).lt('updated_at', timeoutAt).select('id');
+  const { data: expired, error: expireError } = await db.from('leads').update({ status: 'timed_out', updated_at: new Date().toISOString() }).in('status', ['in_progress', 'generating', 'generating_video', 'delivering', 'delivery_failed', 'waiting_response', 'waiting_payment', 'waiting_pix', 'waiting_delay']).lt('updated_at', timeoutAt).select('id');
   if (expireError) return NextResponse.json({ error: expireError.message }, { status: 500 });
   const { data: pending, error } = await db.from('leads').select('*').eq('status', 'waiting_delay').limit(100);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
@@ -115,6 +115,35 @@ export async function POST(request) {
       console.error('[kie recovery] failed', { leadId: item.id, error: recoverError.message });
     }
   }
+  // A Shotstack normalmente avisa quando termina, mas callbacks podem ser
+  // perdidos ou chegar como evento de hospedagem. Para não travar o fluxo,
+  // consultamos os vídeos pendentes e reenviamos o callback verificado.
+  let recoveredLyricVideos = 0;
+  const { data: pendingLyricVideos, error: pendingLyricVideosError } = await db.from('leads').select('*').eq('status', 'generating_video').lt('updated_at', staleAt).limit(25);
+  if (pendingLyricVideosError) return NextResponse.json({ error: pendingLyricVideosError.message }, { status: 500 });
+  for (const item of pendingLyricVideos || []) {
+    const execution = item.order_context?.flow_execution;
+    if (!execution?.lyric_video_order_id || !process.env.SHOTSTACK_API_KEY || !process.env.SHOTSTACK_WEBHOOK_SECRET) continue;
+    try {
+      const { data: lyricOrder, error: lyricOrderError } = await db.from('lyric_video_orders').select('id,shotstack_render_id,status').eq('id', execution.lyric_video_order_id).eq('owner_id', item.owner_id).maybeSingle();
+      if (lyricOrderError) throw lyricOrderError;
+      if (!lyricOrder?.shotstack_render_id || lyricOrder.status !== 'rendering') continue;
+      const environment = process.env.SHOTSTACK_ENVIRONMENT || 'v1';
+      const renderResponse = await fetch(`https://api.shotstack.io/edit/${environment}/render/${encodeURIComponent(lyricOrder.shotstack_render_id)}`, { headers: { accept: 'application/json', 'x-api-key': process.env.SHOTSTACK_API_KEY } });
+      const renderPayload = await renderResponse.json().catch(() => ({}));
+      const render = renderPayload?.response;
+      if (!renderResponse.ok || !render?.id) throw new Error('Não foi possível consultar o render pendente na Shotstack.');
+      if (String(render.status || '').toLowerCase() !== 'done') continue;
+      const callbackUrl = new URL('/api/webhooks/shotstack-lyric-video', request.url);
+      callbackUrl.searchParams.set('order', lyricOrder.id);
+      callbackUrl.searchParams.set('token', process.env.SHOTSTACK_WEBHOOK_SECRET);
+      const callbackResponse = await fetch(callbackUrl, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ type: 'edit', id: lyricOrder.shotstack_render_id, status: 'done' }) });
+      if (!callbackResponse.ok) throw new Error(`A recuperação do lyric video falhou (${callbackResponse.status}).`);
+      recoveredLyricVideos += 1;
+    } catch (lyricRecoveryError) {
+      console.error('[lyric video recovery] failed', { leadId: item.id, error: lyricRecoveryError.message });
+    }
+  }
   // Uma URL temporária de áudio também pode expirar durante o envio. Tentamos
   // recuperar cada entrega falha uma única vez, respeitando as faixas já enviadas.
   let recoveredDelivery = 0;
@@ -153,5 +182,5 @@ export async function POST(request) {
       console.error('[kie delivery recovery] failed', { leadId: item.id, error: deliveryError.message });
     }
   }
-  return NextResponse.json({ received: true, resumed, unstarted_payment_recovered: recoveredUnstarted, kie_recovered: recoveredKie, delivery_recovered: recoveredDelivery, timed_out: stopped, timeout_hours: timeoutHours });
+  return NextResponse.json({ received: true, resumed, unstarted_payment_recovered: recoveredUnstarted, kie_recovered: recoveredKie, lyric_video_recovered: recoveredLyricVideos, delivery_recovered: recoveredDelivery, timed_out: stopped, timeout_hours: timeoutHours });
 }
