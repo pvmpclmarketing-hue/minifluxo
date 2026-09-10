@@ -30,10 +30,10 @@ async function completeAndDeliverVideo(db, order, outputUrl) {
     return { delivery: 'not_applicable' };
   }
 
-  // A callback da Shotstack pode ser repetida. A transição para "delivering"
+  // A callback da Shotstack pode ser repetida. A transição para "processing"
   // é a trava que permite apenas uma tentativa de envio por render concluído.
   const { data: claim, error: claimError } = await db.from('lyric_video_orders')
-    .update({ status: 'delivering', output_url: outputUrl, error: null, updated_at: now })
+    .update({ status: 'processing', output_url: outputUrl, error: null, updated_at: now })
     .eq('id', order.id)
     .eq('shotstack_render_id', String(order.shotstack_render_id))
     .eq('status', 'rendering')
@@ -74,7 +74,7 @@ async function completeAndDeliverVideo(db, order, outputUrl) {
     const { error: completeError } = await db.from('lyric_video_orders')
       .update({ status: 'complete', output_url: outputUrl, error: null, updated_at: new Date().toISOString() })
       .eq('id', order.id)
-      .eq('status', 'delivering');
+      .eq('status', 'processing');
     if (completeError) throw completeError;
 
     console.info('[lyric-video delivery] WhatsApp video sent', { lyric_video_order_id: order.id, lead_id: lead.id });
@@ -93,7 +93,7 @@ async function completeAndDeliverVideo(db, order, outputUrl) {
       output_url: outputUrl,
       error: `Entrega no WhatsApp: ${error.message || 'falhou'}`,
       updated_at: new Date().toISOString(),
-    }).eq('id', order.id).eq('status', 'delivering');
+    }).eq('id', order.id).eq('status', 'processing');
     console.error('[lyric-video delivery] WhatsApp delivery failed', { lyric_video_order_id: order.id, error: error.message || String(error) });
     throw error;
   }
