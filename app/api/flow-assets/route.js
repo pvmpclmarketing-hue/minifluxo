@@ -7,7 +7,7 @@ export const dynamic = 'force-dynamic';
 const mediaTypes = {
   'image/jpeg': { kind: 'image', extension: 'jpg', maxBytes: 5 * 1024 * 1024 },
   'image/png': { kind: 'image', extension: 'png', maxBytes: 5 * 1024 * 1024 },
-  'video/mp4': { kind: 'video', extension: 'mp4', maxBytes: 50 * 1024 * 1024 },
+  'video/mp4': { kind: 'video', extension: 'mp4', maxBytes: 70 * 1024 * 1024 },
 };
 
 export async function POST(request) {
@@ -17,7 +17,7 @@ export async function POST(request) {
     const media = mediaTypes[String(contentType || '').toLowerCase()];
     if (!media) return NextResponse.json({ error: 'Use JPG, PNG ou vídeo MP4.' }, { status: 400 });
     if (!Number.isFinite(Number(size)) || Number(size) < 1 || Number(size) > media.maxBytes) {
-      const limit = media.kind === 'video' ? '50 MB' : '5 MB';
+      const limit = media.kind === 'video' ? '70 MB' : '5 MB';
       return NextResponse.json({ error: `${media.kind === 'video' ? 'O vídeo' : 'A imagem'} deve ter no máximo ${limit}.` }, { status: 400 });
     }
 
