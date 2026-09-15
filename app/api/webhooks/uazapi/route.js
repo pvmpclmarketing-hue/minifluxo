@@ -4,6 +4,7 @@ import { hashSecret } from '../../connection-secrets';
 import { executeFlow, resolveMenuChoice } from '../../flow-engine';
 
 const digits=value=>String(value||'').replace(/\D/g,'');
+const sameWhatsApp=(left,right)=>{const a=digits(left),b=digits(right);return Boolean(a&&b&&(a===b||(a.length>=8&&b.length>=8&&a.slice(-8)===b.slice(-8))));};
 // O site pode salvar um celular brasileiro com ou sem o nono dígito, enquanto
 // o WhatsApp/UazAPI costuma devolvê-lo sempre no formato que está na conta.
 // Consultamos as duas formas para que um clique em botão nunca se perca por
@@ -42,7 +43,17 @@ export async function POST(request){
     if(!['messages','messages_update'].includes(event)||(ownMessage&&!interactiveReply))return NextResponse.json({received:true,ignored:true});
     const text=messageText(body);if(!phone)return NextResponse.json({received:true,ignored:true});
     const variants=phoneVariants(phone);
-    const {data:contacts=[]}=await db.from('leads').select('*').eq('connection_id',connection.id).in('phone',variants).order('updated_at',{ascending:false});const ownedContacts=contacts.filter(item=>item.owner_id===connection.owner_id);const existing=ownedContacts.find(item=>item.status==='waiting_response'&&(item.order_context?.flow_execution?.wait_node_id||item.order_context?.flow_execution?.menu_node_id));
+    const [{data:contacts=[]},{data:waitingContacts=[]}]=await Promise.all([
+      db.from('leads').select('*').eq('connection_id',connection.id).in('phone',variants).order('updated_at',{ascending:false}),
+      db.from('leads').select('*').eq('connection_id',connection.id).eq('status','waiting_response').order('updated_at',{ascending:false}).limit(100),
+    ]);
+    const ownedContacts=contacts.filter(item=>item.owner_id===connection.owner_id);
+    const exactWaiting=ownedContacts.find(item=>item.status==='waiting_response'&&(item.order_context?.flow_execution?.wait_node_id||item.order_context?.flow_execution?.menu_node_id));
+    // A UazAPI pode devolver o mesmo celular com o DDI que não estava presente
+    // no disparo. Só usamos os últimos oito dígitos como fallback quando há uma
+    // execução ativa inequivocamente correspondente a esta conexão.
+    const fallbackWaiting=waitingContacts.filter(item=>item.owner_id===connection.owner_id&&sameWhatsApp(item.phone,phone)&&(item.order_context?.flow_execution?.wait_node_id||item.order_context?.flow_execution?.menu_node_id));
+    const existing=exactWaiting|| (fallbackWaiting.length===1?fallbackWaiting[0]:null);
     if(existing){const context={...(existing.order_context||{}),last_message:text};const execution=context.flow_execution||{};const {data:flow}=await db.from('flows').select('*').eq('id',execution.flow_id).eq('owner_id',existing.owner_id).maybeSingle();let resumeAfterId=execution.wait_node_id;let resumeHandle=null;if(execution.menu_node_id&&flow){const menuNode=(Array.isArray(flow.nodes)?flow.nodes:[]).find(node=>node.id===execution.menu_node_id);const choice=resolveMenuChoice(menuNode,text);if(choice.sourceHandle==='other'){console.info('[uazapi webhook] menu not recognized',{lead_id:existing.id,received:text.slice(0,60)});return NextResponse.json({received:true,ignored:true,reason:'menu_choice_not_recognized'});}const keys=choice.saveTo.split('.');const flowData={...(context.flow_data||{})};let cursor=flowData;keys.forEach((key,index)=>{if(index===keys.length-1)cursor[key]=choice.selection;else {cursor[key]={...(cursor[key]||{})};cursor=cursor[key];}});context.flow_data=flowData;resumeAfterId=execution.menu_node_id;resumeHandle=choice.sourceHandle;}const values={order_context:context,status:'in_progress',updated_at:new Date().toISOString()};if(name)values.name=name;const {data:lead,error:updateError}=await db.from('leads').update(values).eq('id',existing.id).eq('owner_id',existing.owner_id).eq('connection_id',connection.id).eq('status','waiting_response').select().maybeSingle();if(updateError)throw updateError;if(!lead)return NextResponse.json({received:true,ignored:true,reason:'response_already_claimed'});if(flow?.status==='active'){const result=await executeFlow({db,flow,lead,connection,resumeAfterId,resumeHandle});console.info('[uazapi webhook] flow resumed',{lead_id:lead.id,menu:!!execution.menu_node_id,handle:resumeHandle,result});return NextResponse.json({received:true,resumed:true,menu:!!execution.menu_node_id,result});}console.warn('[uazapi webhook] flow unavailable',{lead_id:lead.id,flow_id:execution.flow_id||null});return NextResponse.json({received:true,ignored:true,reason:'flow_unavailable'});}
     if(ownedContacts.length){if(name)await db.from('leads').update({name,updated_at:new Date().toISOString()}).eq('id',ownedContacts[0].id).eq('owner_id',connection.owner_id);return NextResponse.json({received:true,ignored:true,reason:'contact_already_in_history'});}
     // Respostas de fluxos em espera continuam sendo tratadas acima. Este gatilho
