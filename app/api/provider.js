@@ -60,8 +60,11 @@ export async function sendPixCopyButton(connection,phone,code,amount){
 export async function sendAudio(connection,phone,audioUrl,caption=''){
   if(!connection)throw new Error('Conecte um WhatsApp antes de enviar o áudio.');
   if(connection.provider==='meta'){const response=await fetch(`https://graph.facebook.com/${process.env.META_API_VERSION||'v22.0'}/${process.env.META_PHONE_NUMBER_ID}/messages`,{method:'POST',headers:{Authorization:`Bearer ${process.env.META_ACCESS_TOKEN}`,'Content-Type':'application/json'},body:JSON.stringify({messaging_product:'whatsapp',to:phone,type:'audio',audio:{link:audioUrl}})});if(!response.ok)throw new Error(`Meta: ${response.status} ${await response.text()}`);return response.json();}
-  const media=await uazMediaFile(audioUrl,'audio','áudio',18*1024*1024);
-  return uazSendWithPhoneFallback(connection,phone,'/send/media',{type:'audio',file:media.file,mimetype:media.contentType,text:caption});
+  // A UazAPI aceita URL HTTPS. Repassar a URL assinada evita transformar
+  // vídeos e áudios grandes em JSON base64, que pode ser recusado pelo
+  // provedor como payload inválido.
+  if(!/^https:\/\//i.test(String(audioUrl)))throw new Error('A URL do áudio precisa ser HTTPS.');
+  return uazSendWithPhoneFallback(connection,phone,'/send/media',{type:'audio',file:audioUrl,text:caption});
 }
 
 export async function sendMedia(connection,phone,type,mediaUrl,caption=''){
@@ -72,6 +75,6 @@ export async function sendMedia(connection,phone,type,mediaUrl,caption=''){
     if(!response.ok)throw new Error(`Meta: ${response.status} ${await response.text()}`);
     return response.json();
   }
-  const media=await uazMediaFile(mediaUrl,type,type==='image'?'imagem':'vídeo',type==='image'?5*1024*1024:70*1024*1024);
-  return uazSendWithPhoneFallback(connection,phone,'/send/media',{type,file:media.file,mimetype:media.contentType,text:caption});
+  if(!/^https:\/\//i.test(String(mediaUrl)))throw new Error('A URL da mídia precisa ser HTTPS.');
+  return uazSendWithPhoneFallback(connection,phone,'/send/media',{type,file:mediaUrl,text:caption});
 }
