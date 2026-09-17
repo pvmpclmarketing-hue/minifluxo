@@ -3,7 +3,11 @@ import { adminClient } from '../../supabase';
 import { executeFlow, recoverKieGeneration, retryKieDelivery } from '../../flow-engine';
 
 export async function POST(request) {
-  if (!process.env.DELAY_CRON_SECRET || request.headers.get('authorization') !== `Bearer ${process.env.DELAY_CRON_SECRET}`) return new NextResponse(null, { status: 401 });
+  // Em instalações antigas o segredo exclusivo do cron pode não existir. O
+  // segredo do webhook de pagamentos continua sendo uma credencial privada de
+  // servidor e permite que a recuperação automática permaneça protegida.
+  const cronSecret = process.env.DELAY_CRON_SECRET || process.env.PAYMENT_WEBHOOK_SECRET;
+  if (!cronSecret || request.headers.get('authorization') !== `Bearer ${cronSecret}`) return new NextResponse(null, { status: 401 });
   const db = adminClient();
   const now = Date.now();
   const timeoutHours = Math.max(1, Number(process.env.FLOW_EXECUTION_TIMEOUT_HOURS || 24));
