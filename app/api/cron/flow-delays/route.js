@@ -6,8 +6,11 @@ export async function POST(request) {
   // Em instalações antigas o segredo exclusivo do cron pode não existir. O
   // segredo do webhook de pagamentos continua sendo uma credencial privada de
   // servidor e permite que a recuperação automática permaneça protegida.
-  const cronSecret = process.env.DELAY_CRON_SECRET || process.env.PAYMENT_WEBHOOK_SECRET;
-  if (!cronSecret || request.headers.get('authorization') !== `Bearer ${cronSecret}`) return new NextResponse(null, { status: 401 });
+  const receivedAuthorization = request.headers.get('authorization');
+  const acceptedSecrets = [process.env.DELAY_CRON_SECRET, process.env.PAYMENT_WEBHOOK_SECRET]
+    .filter(Boolean)
+    .map((secret) => `Bearer ${secret}`);
+  if (!acceptedSecrets.length || !acceptedSecrets.includes(receivedAuthorization)) return new NextResponse(null, { status: 401 });
   const db = adminClient();
   const now = Date.now();
   const timeoutHours = Math.max(1, Number(process.env.FLOW_EXECUTION_TIMEOUT_HOURS || 24));
