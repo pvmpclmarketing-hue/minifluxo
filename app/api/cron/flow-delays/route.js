@@ -41,7 +41,10 @@ export async function POST(request) {
   if (unstartedError) return NextResponse.json({ error: unstartedError.message }, { status: 500 });
   for (const item of unstartedPayments || []) {
     const context = item.order_context || {};
-    if (!context.paid || context.fulfillment_mode !== 'generate_music_in_miniflux' || context.flow_execution || item.kie_task_id || item.music_url || !String(context.lyricText || '').trim()) continue;
+    // Alguns webhooks antigos gravaram um objeto vazio como checkpoint. Isso
+    // não representa uma execução iniciada e deve poder ser retomado.
+    const hasFlowExecution = Boolean(context.flow_execution && Object.keys(context.flow_execution).length);
+    if (!context.paid || context.fulfillment_mode !== 'generate_music_in_miniflux' || hasFlowExecution || item.kie_task_id || item.music_url || !String(context.lyricText || '').trim()) continue;
     try {
       let connection = null;
       if (item.connection_id) {
