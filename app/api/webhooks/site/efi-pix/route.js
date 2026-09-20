@@ -63,10 +63,20 @@ export async function POST(request) {
     if (!siteSecretMatches(request.headers.get('x-site-secret'))) return new NextResponse(null, { status: 401 });
     const body = await request.json();
     const phone = cleanPhone(body.phone), orderId = String(body.order_id || '').trim(), amountCents = Number(body.amount_cents);
-    if (!body.integration_key || !orderId || !body.name || !phone || !Number.isInteger(amountCents) || amountCents < 1) return NextResponse.json({ error: 'Pedido Efí inválido.' }, { status: 400 });
+    if (!body.integration_key || !orderId || !body.name || !phone || !Number.isInteger(amountCents) || amountCents < 1) {
+      console.warn('[site efi pix] rejected invalid order', {
+        order_id: orderId || null,
+        has_integration_key: Boolean(body.integration_key), has_name: Boolean(body.name),
+        has_phone: Boolean(phone), has_valid_amount: Number.isInteger(amountCents) && amountCents >= 1,
+      });
+      return NextResponse.json({ error: 'Pedido Efí inválido.' }, { status: 400 });
+    }
     const db = adminClient();
     const connection = await resolveConnection(db, body.integration_key);
-    if (!connection) return NextResponse.json({ error: 'Informe uma integration_key válida.' }, { status: 400 });
+    if (!connection) {
+      console.warn('[site efi pix] rejected invalid integration', { order_id: orderId, has_integration_key: Boolean(body.integration_key) });
+      return NextResponse.json({ error: 'Informe uma integration_key válida.' }, { status: 400 });
+    }
     if (connection.status !== 'connected') return NextResponse.json({ error: 'O WhatsApp desta integração não está conectado.' }, { status: 409 });
     const mode = fulfillmentMode(body);
     if (!['deliver_existing_preview_audio', 'generate_music_in_miniflux'].includes(mode)) return NextResponse.json({ error: 'fulfillment.mode deve ser deliver_existing_preview_audio ou generate_music_in_miniflux.' }, { status: 400 });

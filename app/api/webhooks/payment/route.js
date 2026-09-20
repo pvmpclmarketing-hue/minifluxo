@@ -50,16 +50,28 @@ export async function POST(request) {
     stage = 'payload_validation';
     const body = await request.json();
     if (body.event !== 'PAYMENT_APPROVED') return NextResponse.json({ received: true, ignored: true });
-    if (!body.customer?.name || !body.customer?.phone) return NextResponse.json({ error: 'customer.name e customer.phone sao obrigatorios.' }, { status: 400 });
-    const mode = fulfillmentMode(body);
-    if (!['deliver_existing_preview_audio', 'generate_music_in_miniflux'].includes(mode)) return NextResponse.json({ error: 'fulfillment.mode deve ser deliver_existing_preview_audio ou generate_music_in_miniflux.' }, { status: 400 });
     const orderId = body.order_id || body.orderId || null;
-    if (!orderId) return NextResponse.json({ error: 'order_id e obrigatorio para evitar disparos duplicados.' }, { status: 400 });
+    if (!body.customer?.name || !body.customer?.phone) {
+      console.warn('[payment webhook] rejected missing customer', { order_id: orderId, has_name: Boolean(body.customer?.name), has_phone: Boolean(body.customer?.phone) });
+      return NextResponse.json({ error: 'customer.name e customer.phone sao obrigatorios.' }, { status: 400 });
+    }
+    const mode = fulfillmentMode(body);
+    if (!['deliver_existing_preview_audio', 'generate_music_in_miniflux'].includes(mode)) {
+      console.warn('[payment webhook] rejected invalid fulfillment mode', { order_id: orderId, mode: mode || null });
+      return NextResponse.json({ error: 'fulfillment.mode deve ser deliver_existing_preview_audio ou generate_music_in_miniflux.' }, { status: 400 });
+    }
+    if (!orderId) {
+      console.warn('[payment webhook] rejected missing order id', { mode });
+      return NextResponse.json({ error: 'order_id e obrigatorio para evitar disparos duplicados.' }, { status: 400 });
+    }
 
     stage = 'connection_resolution';
     const db = adminClient();
     const connection = await resolveConnection(db, body);
-    if (!connection) return NextResponse.json({ error: 'Informe uma integration_key valida.' }, { status: 400 });
+    if (!connection) {
+      console.warn('[payment webhook] rejected invalid integration', { order_id: orderId, has_integration_key: Boolean(body.integration_key), has_connection_id: Boolean(body.connection_id) });
+      return NextResponse.json({ error: 'Informe uma integration_key valida.' }, { status: 400 });
+    }
     stage = 'flow_configuration';
     const { data: config, error: configError } = await db.from('connection_flow_configs').select('payment_preview_flow_id,payment_generation_flow_id,owner_id').eq('connection_id', connection.id).single();
     if (config?.owner_id !== connection.owner_id) return NextResponse.json({ error: 'A configuração não pertence à conta desta conexão.' }, { status: 403 });
