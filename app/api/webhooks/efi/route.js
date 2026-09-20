@@ -52,6 +52,13 @@ export async function POST(request) {
       updated_at: now,
     }).eq('txid', txid).eq('status', 'pending').select().maybeSingle();
     if (!claimed) { processed.push({ txid, duplicate: true }); continue; }
+    // A confirmação do pedido no site é independente do canal de entrega.
+    // Mesmo que o WhatsApp esteja em manutenção, o Pix Efí pago não pode
+    // ficar como pendente no checkout do cliente.
+    const { data: paymentLead } = await db.from('leads').select('*').eq('id', claimed.lead_id).eq('owner_id', claimed.owner_id).maybeSingle();
+    let sitePayment = null;
+    try { sitePayment = await notifySitePayment(paymentLead, claimed, payment); }
+    catch (error) { console.error('[efi webhook] site payment status failed', { txid, error: error?.message || String(error) }); }
     const [{ data: lead }, { data: flow }, { data: connection }] = await Promise.all([
       db.from('leads').select('*').eq('id', claimed.lead_id).eq('owner_id', claimed.owner_id).eq('connection_id', claimed.connection_id).maybeSingle(),
       db.from('flows').select('*').eq('id', claimed.flow_id).eq('owner_id', claimed.owner_id).maybeSingle(),
@@ -62,9 +69,6 @@ export async function POST(request) {
     const { data: paidLead, error: leadError } = await db.from('leads').update({ status: 'in_progress', order_context: context, updated_at: now }).eq('id', lead.id).eq('owner_id', claimed.owner_id).eq('connection_id', claimed.connection_id).select().single();
     if (leadError) { processed.push({ txid, error: leadError.message }); continue; }
     try {
-      let sitePayment = null;
-      try { sitePayment = await notifySitePayment(paidLead, claimed, payment); }
-      catch (error) { console.error('[efi webhook] site payment status failed', { txid, error: error?.message || String(error) }); }
       // Cobranças criadas pelo endpoint do site Efí carregam este marcador. Elas
       // devem iniciar o fluxo configurado em Disparos desde a entrada, exatamente
       // como um PAYMENT_APPROVED do Asaas. As cobranças antigas preservam o
