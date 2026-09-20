@@ -26,6 +26,21 @@ function siteSecretMatches(value) {
     .some((expected) => received.length === expected.length && timingSafeEqual(Buffer.from(received), Buffer.from(expected)));
 }
 function efiError(prefix, response) { return new Error(`${prefix}: ${response.data?.mensagem || response.data?.message || response.raw || response.status}`); }
+async function retryEfiRequest(operation) {
+  let lastError;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const response = await operation();
+      const transient = response.status === 408 || response.status === 429 || response.status >= 500;
+      if (!transient || attempt === 2) return response;
+    } catch (error) {
+      lastError = error;
+      if (attempt === 2) throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 700 * (attempt + 1)));
+  }
+  throw lastError || new Error('A Efí não respondeu ao criar o Pix.');
+}
 function urlsFrom(value, result = new Set()) {
   if (!value) return result;
   if (Array.isArray(value)) { value.forEach((item) => urlsFrom(item, result)); return result; }
@@ -53,7 +68,7 @@ async function efiToken(efi) {
   const pfx = Buffer.from(efi.certificateP12, 'base64');
   if (!pfx.length) throw new Error('O certificado P12 da Efí está inválido. Envie-o novamente na aba APIs.');
   const basic = Buffer.from(`${efi.clientId}:${efi.clientSecret}`).toString('base64');
-  const response = await efiRequest({ hostname, path: '/oauth/token', headers: { Authorization: `Basic ${basic}`, 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'grant_type=client_credentials', pfx, passphrase: efi.certificatePassword });
+  const response = await retryEfiRequest(() => efiRequest({ hostname, path: '/oauth/token', headers: { Authorization: `Basic ${basic}`, 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'grant_type=client_credentials', pfx, passphrase: efi.certificatePassword }));
   if (response.status < 200 || response.status >= 300 || !response.data?.access_token) throw efiError('Efí OAuth', response);
   return { hostname, pfx, token: response.data.access_token };
 }
@@ -109,11 +124,11 @@ export async function POST(request) {
     const efi = (await credentialsFor(db, flow.id, flow.owner_id)).efi;
     if (!efi) return NextResponse.json({ error: 'Cadastre Client ID, Client Secret, certificado P12 e chave Pix da Efí na aba APIs do Minifluxo.' }, { status: 409 });
     const auth = await efiToken(efi), txid = createHash('sha256').update(`site-efi:${orderId}`).digest('hex').slice(0, 32), expiration = 1800;
-    const charge = await efiRequest({ hostname: auth.hostname, path: `/v2/cob/${txid}`, method: 'PUT', headers: { Authorization: `Bearer ${auth.token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ calendario: { expiracao: expiration }, valor: { original: (amountCents / 100).toFixed(2) }, chave: efi.pixKey, solicitacaoPagador: `Pedido música ${orderId.slice(0, 8)}` }), pfx: auth.pfx, passphrase: efi.certificatePassword });
+    const charge = await retryEfiRequest(() => efiRequest({ hostname: auth.hostname, path: `/v2/cob/${txid}`, method: 'PUT', headers: { Authorization: `Bearer ${auth.token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ calendario: { expiracao: expiration }, valor: { original: (amountCents / 100).toFixed(2) }, chave: efi.pixKey, solicitacaoPagador: `Pedido música ${orderId.slice(0, 8)}` }), pfx: auth.pfx, passphrase: efi.certificatePassword }));
     if (charge.status < 200 || charge.status >= 300 || !charge.data?.pixCopiaECola) throw efiError('Efí Pix', charge);
     let qrCode = null;
     if (charge.data?.loc?.id) {
-      const qr = await efiRequest({ hostname: auth.hostname, path: `/v2/loc/${charge.data.loc.id}/qrcode`, method: 'GET', headers: { Authorization: `Bearer ${auth.token}` }, pfx: auth.pfx, passphrase: efi.certificatePassword });
+      const qr = await retryEfiRequest(() => efiRequest({ hostname: auth.hostname, path: `/v2/loc/${charge.data.loc.id}/qrcode`, method: 'GET', headers: { Authorization: `Bearer ${auth.token}` }, pfx: auth.pfx, passphrase: efi.certificatePassword }));
       if (qr.status >= 200 && qr.status < 300 && qr.data?.imagemQrcode) qrCode = qrImageDataUrl(qr.data.imagemQrcode);
     }
     if (!qrCode) throw new Error('A Efí criou a cobrança, mas não retornou a imagem do QR Code. Tente gerar novamente.');
