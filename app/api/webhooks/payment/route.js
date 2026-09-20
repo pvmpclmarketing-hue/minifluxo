@@ -111,7 +111,19 @@ export async function POST(request) {
       const { data: existing } = await db.from('leads').select('id,status,kie_task_id,order_context').eq('owner_id', flow.owner_id).eq('external_order_id', orderContext.sourceOrderId).maybeSingle();
       if (existing) {
         const execution = existing.order_context?.flow_execution || {};
-        if ((execution.payment_node_id && existing.status === 'waiting_payment') || (execution.kie_node_id && existing.status === 'waiting_pix')) {
+        // O lead de remarketing é criado antes do pagamento. Quando o Pix
+        // original é aprovado, ele precisa trocar para o fluxo de entrega — e
+        // nunca ser tratado como duplicado nem receber uma segunda abordagem.
+        const pendingRemarketing = existing.order_context?.remarketing?.origin === 'site_unpaid_pix' && !existing.order_context?.paid && !existing.kie_task_id;
+        if (pendingRemarketing) {
+          leadValues.order_context = {
+            ...(existing.order_context || {}),
+            ...orderContext,
+            paid: true,
+            remarketing: { ...(existing.order_context?.remarketing || {}), cancelled_by_original_payment_at: new Date().toISOString() },
+            flow_execution: { flow_id: flow.id, original_payment_after_remarketing_at: new Date().toISOString() },
+          };
+        } else if ((execution.payment_node_id && existing.status === 'waiting_payment') || (execution.kie_node_id && existing.status === 'waiting_pix')) {
           resumeAfterId = execution.payment_node_id || execution.kie_node_id;
           leadValues.order_context = { ...(existing.order_context || {}), ...orderContext, paid: true, flow_execution: { flow_id: flow.id, ...(execution.payment_node_id ? { payment_node_id: execution.payment_node_id } : { kie_node_id: execution.kie_node_id }) } };
         }

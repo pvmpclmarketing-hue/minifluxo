@@ -7,7 +7,7 @@ export async function POST(request) {
   // segredo do webhook de pagamentos continua sendo uma credencial privada de
   // servidor e permite que a recuperação automática permaneça protegida.
   const receivedAuthorization = request.headers.get('authorization');
-  const acceptedSecrets = [process.env.DELAY_CRON_SECRET, process.env.PAYMENT_WEBHOOK_SECRET]
+  const acceptedSecrets = [process.env.CRON_SECRET, process.env.DELAY_CRON_SECRET, process.env.PAYMENT_WEBHOOK_SECRET]
     .filter(Boolean)
     .map((secret) => `Bearer ${secret}`);
   if (!acceptedSecrets.length || !acceptedSecrets.includes(receivedAuthorization)) return new NextResponse(null, { status: 401 });
@@ -21,7 +21,7 @@ export async function POST(request) {
   if (expireError) return NextResponse.json({ error: expireError.message }, { status: 500 });
   const { data: pending, error } = await db.from('leads').select('*').eq('status', 'waiting_delay').limit(100);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  let resumed = 0; let recoveredKie = 0; let stopped = expired?.length || 0;
+  let resumed = 0; let remarketingDispatched = 0; let recoveredKie = 0; let stopped = expired?.length || 0;
   // Se o webhook de pagamento falhar entre criar o lead e iniciar a Kie, o
   // pedido fica pago, com letra, porém sem checkpoint nem taskId. Retomamos
   // exclusivamente esse estado inicial; isso não repete fluxos aguardando
@@ -93,6 +93,35 @@ export async function POST(request) {
   }
   for (const item of pending || []) {
     const execution = item.order_context?.flow_execution;
+    const remarketing = item.order_context?.remarketing;
+    // O site cria esta espera depois de emitir o QR Code. Somente quando os
+    // 20 minutos passam sem pagamento iniciamos o fluxo configurado. O claim
+    // condicional torna a rotina segura mesmo se dois crons coincidirem.
+    if (execution?.remarketing_eligible_at) {
+      if (item.order_context?.paid || Date.parse(execution.remarketing_eligible_at) > now) continue;
+      try {
+        const [{ data: flow }, { data: connection }] = await Promise.all([
+          db.from('flows').select('*').eq('id', remarketing?.flow_id).eq('owner_id', item.owner_id).eq('status', 'active').maybeSingle(),
+          db.from('connections').select('*').eq('id', item.connection_id).eq('owner_id', item.owner_id).eq('status', 'connected').maybeSingle(),
+        ]);
+        if (!flow || !connection) continue;
+        const { data: claimed } = await db.from('leads').update({
+          status: 'in_progress',
+          order_context: {
+            ...(item.order_context || {}),
+            remarketing: { ...(remarketing || {}), dispatched_at: new Date().toISOString() },
+            flow_execution: { flow_id: flow.id, remarketing_dispatched_at: new Date().toISOString() },
+          },
+          updated_at: new Date().toISOString(),
+        }).eq('id', item.id).eq('owner_id', item.owner_id).eq('status', 'waiting_delay').select().maybeSingle();
+        if (!claimed) continue;
+        await executeFlow({ db, flow, lead: claimed, connection });
+        remarketingDispatched += 1;
+      } catch (remarketingError) {
+        console.error('[site remarketing] dispatch failed', { leadId: item.id, error: remarketingError.message });
+      }
+      continue;
+    }
     if (!execution?.delay_node_id || !execution.resume_at || Date.parse(execution.resume_at) > now) continue;
     if (Date.parse(execution.resume_at) < Date.parse(timeoutAt)) {
       const { data: stoppedLead } = await db.from('leads').update({ status: 'timed_out', updated_at: new Date().toISOString() }).eq('id', item.id).eq('status', 'waiting_delay').select('id').maybeSingle();
@@ -193,5 +222,11 @@ export async function POST(request) {
       console.error('[kie delivery recovery] failed', { leadId: item.id, error: deliveryError.message });
     }
   }
-  return NextResponse.json({ received: true, resumed, unstarted_payment_recovered: recoveredUnstarted, kie_recovered: recoveredKie, lyric_video_recovered: recoveredLyricVideos, delivery_recovered: recoveredDelivery, timed_out: stopped, timeout_hours: timeoutHours });
+  return NextResponse.json({ received: true, resumed, remarketing_dispatched: remarketingDispatched, unstarted_payment_recovered: recoveredUnstarted, kie_recovered: recoveredKie, lyric_video_recovered: recoveredLyricVideos, delivery_recovered: recoveredDelivery, timed_out: stopped, timeout_hours: timeoutHours });
+}
+
+// A Vercel chama Cron Jobs por GET. Mantemos POST para o gatilho seguro já
+// usado pela instalação atual e reaproveitamos exatamente a mesma validação.
+export async function GET(request) {
+  return POST(request);
 }

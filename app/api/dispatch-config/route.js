@@ -12,6 +12,7 @@ export async function POST(request) {
       payment_preview_flow_id:body.payment_preview_flow_id||null,
       payment_generation_flow_id:body.payment_generation_flow_id||null,
       site_flow_id:body.site_flow_id||null,
+      remarketing_flow_id:body.remarketing_flow_id||null,
       // O WhatsEntregavel continua ouvindo respostas para blocos "Aguardar resposta",
       // mas novas conversas não iniciam mais um fluxo por esta configuração.
       conversation_flow_id:null,
