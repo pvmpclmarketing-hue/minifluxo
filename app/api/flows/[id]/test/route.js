@@ -25,6 +25,10 @@ export async function POST(request, { params }) {
     const { data: flow, error: flowError } = await db.from('flows').select('*').eq('id', id).eq('status', 'active').maybeSingle();
     if (flowError) throw flowError;
     if (!flow) return NextResponse.json({ error: 'Fluxo ativo não encontrado.' }, { status: 404 });
+    const resumeAfterId=String(body.resume_after_id||'').trim()||null;
+    if(resumeAfterId&&!(Array.isArray(flow.nodes)?flow.nodes:[]).some(node=>node?.id===resumeAfterId))return NextResponse.json({error:'Etapa de retomada não existe neste fluxo.'},{status:400});
+    const lyricText=String(body.lyric_text||'').trim();
+    const audios=Array.isArray(body.audios)?body.audios.map(value=>String(value||'').trim()).filter(value=>/^https:\/\//i.test(value)).slice(0,2):[];
 
     const connectionId = String(body.connection_id || '').trim();
     if (!connectionId) return NextResponse.json({ error: 'Informe a conexão do WhatsApp para o teste.' }, { status: 400 });
@@ -41,12 +45,12 @@ export async function POST(request, { params }) {
       provider: connection.provider,
       connection_id: connection.id,
       external_order_id: `test:${flow.id}:${randomUUID()}`,
-      order_context: { test_dispatch: true, flow_execution: { flow_id: flow.id } },
+      order_context: { test_dispatch: true, lyricText: lyricText||undefined, kie_audios: audios, paid:!!body.paid, flow_execution: { flow_id: flow.id } },
     }).select().single();
     if (leadError) throw leadError;
 
     try {
-      const result = await executeFlow({ db, flow, lead, connection });
+      const result = await executeFlow({ db, flow, lead, connection, resumeAfterId, audios });
       return NextResponse.json({ received: true, execution_id: lead.id, result });
     } catch (error) {
       await db.from('leads').update({
