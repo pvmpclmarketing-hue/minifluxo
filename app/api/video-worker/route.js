@@ -16,6 +16,19 @@ export async function POST(request) {
     const body = await request.json();
     const db = adminClient();
 
+    if (body.action === 'claim-order') {
+      const orderId = String(body.orderId || '');
+      if (!orderId) return reply({ error: 'orderId é obrigatório.' }, 400);
+      const { data: current, error: currentError } = await db.from('video_orders').select('*').eq('id', orderId).maybeSingle();
+      if (currentError) throw currentError;
+      if (!current || current.status !== 'pending' || Number(current.attempts || 0) >= 3) return reply({ order: null });
+      const { data: claimed, error: claimError } = await db.from('video_orders').update({
+        status: 'processing', attempts: Number(current.attempts || 0) + 1, locked_at: new Date().toISOString(), updated_at: new Date().toISOString(), error: null,
+      }).eq('id', orderId).eq('status', 'pending').eq('attempts', current.attempts).select().maybeSingle();
+      if (claimError) throw claimError;
+      return reply({ order: claimed || null });
+    }
+
     if (body.action === 'claim') {
       const { data, error } = await db.rpc('claim_pending_video_order');
       if (error) throw error;

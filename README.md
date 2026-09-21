@@ -26,10 +26,11 @@ O MVP cria vídeos determinísticos de fotos, MP3 e letra. A interface de WhatsA
 
 1. Aplique [20260905_create_video_orders.sql](supabase/migrations/20260905_create_video_orders.sql) no Supabase do Minifluxo.
 2. Instale as dependências: `npm install`.
-3. Instale FFmpeg e deixe `ffmpeg` e `ffprobe` disponíveis no `PATH` do computador/servidor do worker.
-4. Inicie o worker em uma VM ou servidor persistente: `npm run video:worker`.
+3. Configure `GITHUB_ACTIONS_REPOSITORY` e `GITHUB_ACTIONS_DISPATCH_TOKEN` na Vercel. O token precisa ter permissão de disparar Actions neste repositório.
+4. Cadastre no GitHub os secrets `REMOTION_WORKER_API_URL` (URL pública da Vercel) e `VIDEO_WORKER_TOKEN` (mesmo valor da Vercel).
+5. O workflow `.github/workflows/render-remotion.yml` é acionado automaticamente a cada job.
 
-Não execute o worker na Vercel: renderização de 60 segundos exige disco temporário, FFmpeg e pode superar o tempo de execução de uma função serverless.
+Não execute o render na Vercel: renderização de 60 segundos exige disco temporário e pode superar o tempo de execução de uma função serverless. O GitHub Actions executa o Remotion e envia o MP4 ao Supabase Storage.
 
 ### Criar e testar pelo painel
 

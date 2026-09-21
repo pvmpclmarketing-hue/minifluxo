@@ -1,0 +1,35 @@
+name: Render Remotion video
+
+on:
+  repository_dispatch:
+    types: [remotion-render]
+  workflow_dispatch:
+    inputs:
+      order_id:
+        description: ID do pedido de vídeo
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: remotion-${{ github.event.client_payload.order_id || inputs.order_id }}
+  cancel-in-progress: false
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Renderizar e enviar para o Supabase
+        env:
+          WORKER_API_URL: ${{ secrets.REMOTION_WORKER_API_URL }}
+          VIDEO_WORKER_TOKEN: ${{ secrets.VIDEO_WORKER_TOKEN }}
+        run: npx tsx worker/renderOne.ts "${{ github.event.client_payload.order_id || inputs.order_id }}"
