@@ -21,7 +21,11 @@ function siteSecretMatches(value) {
   // Em instalações já existentes, reutilizamos o segredo privado que também
   // autentica o callback Minifluxo -> Supabase. Uma instalação nova pode usar
   // SITE_WEBHOOK_SECRET dedicado sem alterar este endpoint.
-  return [process.env.SITE_WEBHOOK_SECRET, process.env.EFI_SITE_PAYMENT_WEBHOOK_SECRET]
+  return [
+    process.env.SITE_WEBHOOK_SECRET,
+    process.env.EFI_SITE_PAYMENT_WEBHOOK_SECRET,
+    process.env.WHATSENTREGAVEL_SITE_SECRET,
+  ]
     .filter(Boolean)
     .some((expected) => received.length === expected.length && timingSafeEqual(Buffer.from(received), Buffer.from(expected)));
 }

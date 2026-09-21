@@ -1,5 +1,22 @@
 import { NextResponse } from 'next/server';
+import { timingSafeEqual } from 'crypto';
 import { adminClient } from '../../../supabase';
+
+// O site e o Mini Fluxo são serviços distintos e podem estar em fases de
+// rotação de segredo diferentes. Aceitamos somente os segredos privados já
+// configurados para essa integração, sempre em comparação de tempo constante.
+// Assim, um Pix novo nunca deixa de entrar no remarketing por depender do nome
+// antigo ou novo da variável de ambiente.
+function siteSecretMatches(value) {
+  const received = String(value || '');
+  return [
+    process.env.SITE_WEBHOOK_SECRET,
+    process.env.EFI_SITE_PAYMENT_WEBHOOK_SECRET,
+    process.env.WHATSENTREGAVEL_SITE_SECRET,
+  ].filter(Boolean).some((expected) => (
+    received.length === expected.length && timingSafeEqual(Buffer.from(received), Buffer.from(expected))
+  ));
+}
 
 async function resolveConnection(db, integrationKey) {
   if (!integrationKey) return null;
@@ -12,7 +29,7 @@ async function resolveConnection(db, integrationKey) {
 // cria nem altera o Pix: apenas agenda um contato de remarketing idempotente.
 export async function POST(request) {
   try {
-    if (!process.env.SITE_WEBHOOK_SECRET || request.headers.get('x-site-secret') !== process.env.SITE_WEBHOOK_SECRET) return new NextResponse(null, { status: 401 });
+    if (!siteSecretMatches(request.headers.get('x-site-secret'))) return new NextResponse(null, { status: 401 });
     const body = await request.json();
     const orderId = String(body.order_id || body.orderId || '').trim();
     const phone = String(body.customer?.phone || body.phone || '').replace(/\D/g, '');
