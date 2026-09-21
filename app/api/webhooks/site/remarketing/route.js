@@ -38,8 +38,14 @@ export async function POST(request) {
     const phone = String(body.customer?.phone || body.phone || '').replace(/\D/g, '');
     const name = String(body.customer?.name || body.name || '').trim();
     const lyricText = String(body.lyric_text || body.lyricText || '').trim();
-    if (!orderId || !name || !/^55\d{10,11}$/.test(phone) || !lyricText) {
-      return NextResponse.json({ error: 'order_id, customer, telefone brasileiro e lyric_text sao obrigatorios.' }, { status: 400 });
+    if (!orderId || !name || !lyricText) {
+      return NextResponse.json({ error: 'order_id, customer e lyric_text sao obrigatorios.' }, { status: 400 });
+    }
+    // Sem um telefone brasileiro válido não há um destinatário seguro para
+    // WhatsApp. Confirmamos o recebimento para o site não repetir o webhook,
+    // mas não criamos lead nem tentamos um disparo.
+    if (!/^55\d{10,11}$/.test(phone)) {
+      return NextResponse.json({ received: true, skipped: true, reason: 'missing_or_invalid_phone' });
     }
 
     const db = adminClient();
