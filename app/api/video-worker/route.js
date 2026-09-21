@@ -60,10 +60,12 @@ export async function POST(request) {
       if (!orderId) return reply({ error: 'orderId é obrigatório.' }, 400);
       const { data: current, error: currentError } = await db.from('video_orders').select('*').eq('id', orderId).maybeSingle();
       if (currentError) throw currentError;
-      if (!current || current.status !== 'pending' || Number(current.attempts || 0) >= 3) return reply({ order: null });
+      const stale = current?.status === 'processing' && current.locked_at
+        && Date.now() - new Date(current.locked_at).getTime() > 5 * 60 * 1000;
+      if (!current || (!['pending', ...(stale ? ['processing'] : [])].includes(current.status)) || Number(current.attempts || 0) >= 3) return reply({ order: null });
       const { data: claimed, error: claimError } = await db.from('video_orders').update({
         status: 'processing', attempts: Number(current.attempts || 0) + 1, locked_at: new Date().toISOString(), updated_at: new Date().toISOString(), error: null,
-      }).eq('id', orderId).eq('status', 'pending').eq('attempts', current.attempts).select().maybeSingle();
+      }).eq('id', orderId).eq('status', current.status).eq('attempts', current.attempts).select().maybeSingle();
       if (claimError) throw claimError;
       return reply({ order: claimed || null });
     }
