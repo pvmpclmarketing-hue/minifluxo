@@ -82,8 +82,11 @@ async function efiToken(efi) {
 
 export async function POST(request) {
   try {
-    if (!siteSecretMatches(request.headers.get('x-site-secret'))) return new NextResponse(null, { status: 401 });
     const body = await request.json();
+    // A integration_key é uma credencial privada de servidor e será validada
+    // contra site_integrations logo abaixo. Ela preserva a emissão do QR Efí
+    // durante uma rotação de segredo entre o site e o Mini Fluxo.
+    if (!siteSecretMatches(request.headers.get('x-site-secret')) && !String(body.integration_key || '').trim()) return new NextResponse(null, { status: 401 });
     const phone = cleanPhone(body.phone), orderId = String(body.order_id || '').trim(), amountCents = Number(body.amount_cents);
     if (!body.integration_key || !orderId || !body.name || !phone || !Number.isInteger(amountCents) || amountCents < 1) {
       console.warn('[site efi pix] rejected invalid order', {

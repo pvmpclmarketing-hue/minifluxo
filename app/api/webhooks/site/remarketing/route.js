@@ -29,8 +29,11 @@ async function resolveConnection(db, integrationKey) {
 // cria nem altera o Pix: apenas agenda um contato de remarketing idempotente.
 export async function POST(request) {
   try {
-    if (!siteSecretMatches(request.headers.get('x-site-secret'))) return new NextResponse(null, { status: 401 });
     const body = await request.json();
+    // A chave de integração é um token aleatório, mantido somente nos
+    // servidores (Supabase/Vercel) e confirmado abaixo no banco. Ela permite
+    // que uma rotação de SITE_WEBHOOK_SECRET nunca interrompa o checkout.
+    if (!siteSecretMatches(request.headers.get('x-site-secret')) && !String(body.integration_key || '').trim()) return new NextResponse(null, { status: 401 });
     const orderId = String(body.order_id || body.orderId || '').trim();
     const phone = String(body.customer?.phone || body.phone || '').replace(/\D/g, '');
     const name = String(body.customer?.name || body.name || '').trim();
