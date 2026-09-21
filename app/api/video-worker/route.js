@@ -12,7 +12,7 @@ function authorized(request) {
 
 function reply(data, status = 200) { return NextResponse.json(data, { status }); }
 
-async function deliverCompletedPair(db, order) {
+async function deliverCompletedPair(db, order, { retry = false } = {}) {
   if (!order.lead_id || !order.flow_node_id) return { delivery: 'not_applicable' };
   const { data: pair, error: pairError } = await db.from('video_orders')
     .select('id,output_url,status,variant_index').eq('lead_id', order.lead_id).eq('flow_node_id', order.flow_node_id)
@@ -21,9 +21,10 @@ async function deliverCompletedPair(db, order) {
   if ((pair || []).length !== 2 || pair.some(item => item.status !== 'complete' || !item.output_url)) return { delivery: 'awaiting_pair' };
 
   // Only one of the two completion callbacks may claim WhatsApp delivery.
+  const eligibleStatuses = retry ? ['generating_video', 'completed', 'delivery_failed'] : ['generating_video'];
   const { data: lead, error: leadError } = await db.from('leads').update({
     status: 'delivering', updated_at: new Date().toISOString(),
-  }).eq('id', order.lead_id).eq('owner_id', order.owner_id).eq('status', 'generating_video').select().maybeSingle();
+  }).eq('id', order.lead_id).eq('owner_id', order.owner_id).in('status', eligibleStatuses).select().maybeSingle();
   if (leadError) throw leadError;
   if (!lead) return { delivery: 'already_processing' };
 
@@ -112,6 +113,13 @@ export async function POST(request) {
       const { data: order, error } = await db.from('video_orders').update({ status: 'complete', output_url: body.outputUrl, error: null, updated_at: new Date().toISOString() }).eq('id', orderId).select('*').single();
       if (error || !order) throw error || new Error('Pedido não encontrado.');
       return reply({ ok: true, ...(await deliverCompletedPair(db, order)) });
+    }
+
+    if (body.action === 'redeliver') {
+      const { data: order, error } = await db.from('video_orders').select('*').eq('id', orderId).single();
+      if (error || !order) throw error || new Error('Pedido não encontrado.');
+      if (order.status !== 'complete' || !order.output_url) return reply({ error: 'O vídeo ainda não está pronto para reentrega.' }, 409);
+      return reply({ ok: true, ...(await deliverCompletedPair(db, order, { retry: true })) });
     }
 
     return reply({ error: 'Ação inválida.' }, 400);
