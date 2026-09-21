@@ -124,6 +124,12 @@ export async function POST(request) {
     if (!paymentFlowId) return NextResponse.json({ error: mode === 'deliver_existing_preview_audio' ? 'Configure o fluxo de pagamento com prévia pronta em Disparos.' : 'Configure o fluxo de pagamento sem prévia pronta em Disparos.' }, { status: 409 });
     const { data: paymentFlow } = await db.from('flows').select('*').eq('id', paymentFlowId).eq('owner_id', config.owner_id).maybeSingle();
     if (!paymentFlow || paymentFlow.status !== 'active') return NextResponse.json({ error: 'O fluxo de pagamento selecionado precisa estar ativo.' }, { status: 409 });
+    // A tabela preserva node_id por compatibilidade com cobranças antigas que
+    // retomavam um card Pix. Para pedidos do site ele não é executado antes do
+    // pagamento; guardamos apenas um nó real do fluxo para satisfazer esse
+    // vínculo técnico, enquanto dispatch_like_asaas inicia pela entrada.
+    const paymentNodeId = paymentFlow.nodes?.find((node) => node?.data?.kind === 'paymentConfirmed')?.id || paymentFlow.nodes?.[0]?.id;
+    if (!paymentNodeId) return NextResponse.json({ error: 'O fluxo de pagamento não possui nenhum card configurado.' }, { status: 409 });
 
     let { data: lead } = await db.from('leads').select('*').eq('owner_id', integration.owner_id).eq('external_order_id', orderId).maybeSingle();
     if (!lead) {
@@ -148,7 +154,7 @@ export async function POST(request) {
     const expiresAt = new Date(Date.now() + expiration * 1000).toISOString();
     // A cobrança só registra o fluxo de entrega para o webhook Efí usar após
     // o pagamento; nenhum card do fluxo é executado para criar este QR Code.
-    const { error: chargeError } = await db.from('efi_pix_charges').upsert({ txid, owner_id: integration.owner_id, lead_id: lead.id, connection_id: connection?.id || null, flow_id: paymentFlow.id, node_id: null, amount: (amountCents / 100).toFixed(2), status: 'pending', expires_at: expiresAt, updated_at: new Date().toISOString(), payment_payload: { pix_copia_e_cola: charge.data.pixCopiaECola, qr_code: qrCode, source_order_id: orderId, dispatch_like_asaas: true, fulfillment_mode: mode, preview_audios: audios } }, { onConflict: 'txid' });
+    const { error: chargeError } = await db.from('efi_pix_charges').upsert({ txid, owner_id: integration.owner_id, lead_id: lead.id, connection_id: connection?.id || null, flow_id: paymentFlow.id, node_id: paymentNodeId, amount: (amountCents / 100).toFixed(2), status: 'pending', expires_at: expiresAt, updated_at: new Date().toISOString(), payment_payload: { pix_copia_e_cola: charge.data.pixCopiaECola, qr_code: qrCode, source_order_id: orderId, dispatch_like_asaas: true, fulfillment_mode: mode, preview_audios: audios } }, { onConflict: 'txid' });
     if (chargeError) throw chargeError;
     return NextResponse.json({ order_id: orderId, txid, pixPayload: charge.data.pixCopiaECola, qrCode, expiresAt });
   } catch (error) {
