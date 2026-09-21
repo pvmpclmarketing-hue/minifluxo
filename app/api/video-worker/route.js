@@ -63,7 +63,9 @@ export async function POST(request) {
       if (currentError) throw currentError;
       const stale = current?.status === 'processing' && current.locked_at
         && Date.now() - new Date(current.locked_at).getTime() > 5 * 60 * 1000;
-      if (!current || (!['pending', ...(stale ? ['processing'] : [])].includes(current.status)) || Number(current.attempts || 0) >= 3) return reply({ order: null });
+      if (!current || (!['pending', ...(stale ? ['processing'] : [])].includes(current.status)) || Number(current.attempts || 0) >= 3) {
+        return reply({ order: null, reason: current?.status === 'complete' ? 'complete' : 'unavailable' });
+      }
       const { data: claimed, error: claimError } = await db.from('video_orders').update({
         status: 'processing', attempts: Number(current.attempts || 0) + 1, locked_at: new Date().toISOString(), updated_at: new Date().toISOString(), error: null,
       }).eq('id', orderId).eq('status', current.status).eq('attempts', current.attempts).select().maybeSingle();

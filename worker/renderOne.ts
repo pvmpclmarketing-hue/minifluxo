@@ -26,7 +26,16 @@ async function run() {
   console.log('[render] claiming order', { orderId });
   const claimed = await api({ action: 'claim-order', orderId });
   const order = claimed.order;
-  if (!order) { console.log('[render] order unavailable', { orderId }); return; }
+  if (!order) {
+    if (claimed.reason === 'complete') {
+      console.log('[render] retrying delivery for completed order', { orderId });
+      const retry = await api({ action: 'redeliver', orderId });
+      console.log('[render] delivery retry result', retry);
+      return;
+    }
+    console.log('[render] order unavailable', { orderId });
+    return;
+  }
   const directory = await mkdtemp(path.join(os.tmpdir(), `remotion-${order.id}-`));
   try {
     console.log('[render] requesting input URLs', { orderId: order.id });
@@ -46,7 +55,21 @@ async function run() {
     const composition = await selectComposition({ serveUrl, id: 'MusicVideo', inputProps: { timeline } });
     const output = path.join(directory, 'music-video.mp4');
     console.log('[render] rendering MP4', { orderId: order.id, duration });
-    await renderMedia({ serveUrl, composition, codec: 'h264', audioCodec: 'aac', outputLocation: output, inputProps: { timeline }, concurrency: 1 });
+    // 720×1280 H.264 é visualmente nítido no WhatsApp e evita MP4s grandes
+    // que alguns provedores aceitam na API, mas não conseguem encaminhar.
+    await renderMedia({
+      serveUrl,
+      composition,
+      codec: 'h264',
+      audioCodec: 'aac',
+      audioBitrate: '64k',
+      videoBitrate: '700k',
+      pixelFormat: 'yuv420p',
+      scale: 2 / 3,
+      outputLocation: output,
+      inputProps: { timeline },
+      concurrency: 1,
+    });
     await api({ action: 'status', orderId: order.id, status: 'uploading' });
     console.log('[render] uploading MP4', { orderId: order.id });
     const upload = await api({ action: 'upload-url', orderId: order.id });
