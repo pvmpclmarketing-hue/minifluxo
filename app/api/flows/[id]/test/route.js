@@ -27,8 +27,17 @@ export async function POST(request, { params }) {
     if (!flow) return NextResponse.json({ error: 'Fluxo ativo não encontrado.' }, { status: 404 });
     const resumeAfterId=String(body.resume_after_id||'').trim()||null;
     if(resumeAfterId&&!(Array.isArray(flow.nodes)?flow.nodes:[]).some(node=>node?.id===resumeAfterId))return NextResponse.json({error:'Etapa de retomada não existe neste fluxo.'},{status:400});
-    const lyricText=String(body.lyric_text||'').trim();
-    const audios=Array.isArray(body.audios)?body.audios.map(value=>String(value||'').trim()).filter(value=>/^https:\/\//i.test(value)).slice(0,2):[];
+    let lyricText=String(body.lyric_text||'').trim();
+    let audios=Array.isArray(body.audios)?body.audios.map(value=>String(value||'').trim()).filter(value=>/^https:\/\//i.test(value)).slice(0,2):[];
+    const sourceLeadId=String(body.source_lead_id||'').trim();
+    if(sourceLeadId){
+      const {data:sourceLead,error:sourceError}=await db.from('leads').select('order_context').eq('id',sourceLeadId).eq('owner_id',flow.owner_id).maybeSingle();
+      if(sourceError)throw sourceError;
+      if(!sourceLead)return NextResponse.json({error:'Pedido de origem não encontrado nesta conta.'},{status:404});
+      lyricText=String(sourceLead.order_context?.lyricText||'').trim();
+      audios=Array.isArray(sourceLead.order_context?.kie_audios)?sourceLead.order_context.kie_audios.map(value=>String(value||'').trim()).filter(value=>/^https:\/\//i.test(value)).slice(0,2):audios;
+    }
+    if(resumeAfterId&&(!lyricText||audios.length<2))return NextResponse.json({error:'O teste de vídeo precisa de uma letra e duas faixas prontas.'},{status:400});
 
     const connectionId = String(body.connection_id || '').trim();
     if (!connectionId) return NextResponse.json({ error: 'Informe a conexão do WhatsApp para o teste.' }, { status: 400 });
