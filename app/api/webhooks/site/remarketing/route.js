@@ -50,7 +50,7 @@ export async function POST(request) {
     const { data: flow } = await db.from('flows').select('id,status').eq('id', config.remarketing_flow_id).eq('owner_id', config.owner_id).maybeSingle();
     if (!flow || flow.status !== 'active') return NextResponse.json({ error: 'O fluxo de remarketing configurado nao esta ativo.' }, { status: 409 });
 
-    const eligibleAt = new Date(Date.now() + 20 * 60 * 1000).toISOString();
+    const eligibleAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
     const context = {
       quiz: body.quiz && typeof body.quiz === 'object' ? body.quiz : {},
       story: String(body.story || ''),
