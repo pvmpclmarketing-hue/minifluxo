@@ -34,16 +34,21 @@ async function deliverCompletedPair(db, order, { retry = false } = {}) {
       db.from('flows').select('*').eq('id', lead.order_context?.flow_execution?.flow_id).eq('owner_id', lead.owner_id).eq('status', 'active').maybeSingle(),
     ]);
     if (!connection) throw new Error('O WhatsApp do pedido não está conectado para entregar os vídeos.');
-    if (!flow) throw new Error('O fluxo do pedido não está ativo para concluir a entrega dos vídeos.');
+    // A entrega do produto não pode depender de existir um próximo card. Um
+    // teste, fluxo arquivado ou término natural ainda precisa receber o vídeo.
     for (const item of pair) await sendMedia(connection, lead.phone, 'video', item.output_url, `💖 Seu lyric video — versão ${item.variant_index} está pronto!`);
     const execution=lead.order_context?.flow_execution||{};
     const videos=lead.order_context?.flow_data?.lyric_videos||{};
     const saved=videos[order.flow_node_id]||{};
     const deliveredContext={...lead.order_context,flow_data:{...(lead.order_context?.flow_data||{}),lyric_videos:{...videos,[order.flow_node_id]:{...saved,status:'complete',videos:pair.map(item=>({order_id:item.id,variant_index:item.variant_index,output_url:item.output_url})),sent_at:new Date().toISOString()}}},flow_execution:execution};
-    const { data: deliveredLead, error: deliveredError } = await db.from('leads').update({ status:'in_progress',order_context:deliveredContext,updated_at:new Date().toISOString() }).eq('id', lead.id).eq('owner_id', lead.owner_id).eq('status','delivering').select().single();
+    const deliveryStatus = flow ? 'in_progress' : 'completed';
+    const { data: deliveredLead, error: deliveredError } = await db.from('leads').update({ status:deliveryStatus,order_context:deliveredContext,updated_at:new Date().toISOString() }).eq('id', lead.id).eq('owner_id', lead.owner_id).eq('status','delivering').select().single();
     if (deliveredError) throw deliveredError;
-    await executeFlow({ db, flow, lead: deliveredLead, connection, resumeAfterId: order.flow_node_id });
-    return { delivery: 'sent_and_flow_resumed' };
+    if (flow) {
+      await executeFlow({ db, flow, lead: deliveredLead, connection, resumeAfterId: order.flow_node_id });
+      return { delivery: 'sent_and_flow_resumed' };
+    }
+    return { delivery: 'sent' };
   } catch (error) {
     await db.from('leads').update({ status:'delivery_failed',order_context:{...(lead.order_context||{}),video_delivery_error:String(error?.message||error),flow_execution:{...(lead.order_context?.flow_execution||{}),state:'video_delivery_failed'}},updated_at:new Date().toISOString() }).eq('id', lead.id).eq('owner_id', lead.owner_id).eq('status','delivering');
     throw error;
