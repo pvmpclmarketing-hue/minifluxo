@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
 import { adminClient } from '../supabase';
+import { sendMedia } from '../provider';
+import { executeFlow } from '../flow-engine';
 
 export const dynamic = 'force-dynamic';
 
@@ -9,6 +11,43 @@ function authorized(request) {
 }
 
 function reply(data, status = 200) { return NextResponse.json(data, { status }); }
+
+async function deliverCompletedPair(db, order) {
+  if (!order.lead_id || !order.flow_node_id) return { delivery: 'not_applicable' };
+  const { data: pair, error: pairError } = await db.from('video_orders')
+    .select('id,output_url,status,variant_index').eq('lead_id', order.lead_id).eq('flow_node_id', order.flow_node_id)
+    .order('variant_index', { ascending: true });
+  if (pairError) throw pairError;
+  if ((pair || []).length !== 2 || pair.some(item => item.status !== 'complete' || !item.output_url)) return { delivery: 'awaiting_pair' };
+
+  // Only one of the two completion callbacks may claim WhatsApp delivery.
+  const { data: lead, error: leadError } = await db.from('leads').update({
+    status: 'delivering', updated_at: new Date().toISOString(),
+  }).eq('id', order.lead_id).eq('owner_id', order.owner_id).eq('status', 'generating_video').select().maybeSingle();
+  if (leadError) throw leadError;
+  if (!lead) return { delivery: 'already_processing' };
+
+  try {
+    const [{ data: connection }, { data: flow }] = await Promise.all([
+      db.from('connections').select('*').eq('id', lead.connection_id).eq('owner_id', lead.owner_id).eq('status', 'connected').maybeSingle(),
+      db.from('flows').select('*').eq('id', lead.order_context?.flow_execution?.flow_id).eq('owner_id', lead.owner_id).eq('status', 'active').maybeSingle(),
+    ]);
+    if (!connection) throw new Error('O WhatsApp do pedido não está conectado para entregar os vídeos.');
+    if (!flow) throw new Error('O fluxo do pedido não está ativo para concluir a entrega dos vídeos.');
+    for (const item of pair) await sendMedia(connection, lead.phone, 'video', item.output_url, `💖 Seu lyric video — versão ${item.variant_index} está pronto!`);
+    const execution=lead.order_context?.flow_execution||{};
+    const videos=lead.order_context?.flow_data?.lyric_videos||{};
+    const saved=videos[order.flow_node_id]||{};
+    const deliveredContext={...lead.order_context,flow_data:{...(lead.order_context?.flow_data||{}),lyric_videos:{...videos,[order.flow_node_id]:{...saved,status:'complete',videos:pair.map(item=>({order_id:item.id,variant_index:item.variant_index,output_url:item.output_url})),sent_at:new Date().toISOString()}}},flow_execution:execution};
+    const { data: deliveredLead, error: deliveredError } = await db.from('leads').update({ status:'in_progress',order_context:deliveredContext,updated_at:new Date().toISOString() }).eq('id', lead.id).eq('owner_id', lead.owner_id).eq('status','delivering').select().single();
+    if (deliveredError) throw deliveredError;
+    await executeFlow({ db, flow, lead: deliveredLead, connection, resumeAfterId: order.flow_node_id });
+    return { delivery: 'sent_and_flow_resumed' };
+  } catch (error) {
+    await db.from('leads').update({ status:'delivery_failed',order_context:{...(lead.order_context||{}),video_delivery_error:String(error?.message||error),flow_execution:{...(lead.order_context?.flow_execution||{}),state:'video_delivery_failed'}},updated_at:new Date().toISOString() }).eq('id', lead.id).eq('owner_id', lead.owner_id).eq('status','delivering');
+    throw error;
+  }
+}
 
 export async function POST(request) {
   if (!authorized(request)) return reply({ error: 'Não autorizado.' }, 401);
@@ -47,7 +86,7 @@ export async function POST(request) {
     }
 
     if (body.action === 'input-urls') {
-      const { data: order, error } = await db.from('video_orders').select('audio_url,photos').eq('id', orderId).single();
+      const { data: order, error } = await db.from('video_orders').select('audio_url,photos,background_url').eq('id', orderId).single();
       if (error || !order) throw error || new Error('Pedido não encontrado.');
       const sign = async (value) => {
         if (!value.startsWith('storage://video-inputs/')) return value;
@@ -56,7 +95,7 @@ export async function POST(request) {
         if (signError || !data?.signedUrl) throw signError || new Error('Não foi possível assinar o arquivo.');
         return data.signedUrl;
       };
-      return reply({ audioUrl: await sign(order.audio_url), photoUrls: await Promise.all(order.photos.map(sign)) });
+      return reply({ audioUrl: await sign(order.audio_url), photoUrls: await Promise.all(order.photos.map(sign)), backgroundUrl: order.background_url ? await sign(order.background_url) : null });
     }
 
     if (body.action === 'upload-url') {
@@ -68,9 +107,9 @@ export async function POST(request) {
     }
 
     if (body.action === 'complete') {
-      const { error } = await db.from('video_orders').update({ status: 'complete', output_url: body.outputUrl, error: null, updated_at: new Date().toISOString() }).eq('id', orderId);
-      if (error) throw error;
-      return reply({ ok: true });
+      const { data: order, error } = await db.from('video_orders').update({ status: 'complete', output_url: body.outputUrl, error: null, updated_at: new Date().toISOString() }).eq('id', orderId).select('*').single();
+      if (error || !order) throw error || new Error('Pedido não encontrado.');
+      return reply({ ok: true, ...(await deliverCompletedPair(db, order)) });
     }
 
     return reply({ error: 'Ação inválida.' }, 400);

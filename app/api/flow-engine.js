@@ -2,7 +2,8 @@ import https from 'https';
 import { createHash } from 'crypto';
 import { decryptSecret, hashSecret } from './connection-secrets';
 import { sendAudio, sendMedia, sendMenu, sendPixCopyButton, sendText } from './provider';
-import { submitLyricVideo } from '../../lib/lyric-video/submit';
+import { dispatchRemotionRender } from '../../lib/remotion/dispatch';
+import { createSyncedCaptionBlocks } from '../../lib/lyric-video/sync-lyrics';
 
 const valueAt=(data,path)=>path.split('.').reduce((value,key)=>value?.[key],data);
 const asText=value=>value==null?'':typeof value==='string'?value:JSON.stringify(value);
@@ -183,25 +184,30 @@ async function startLyricVideo(db,flow,lead,node,audios){
   const config=node.data?.config||{};
   const context=lead.order_context||{};
   const lyrics=String(context.lyricText||'').trim();
-  const audioUrl=String(audios[0]||'').trim();
-  if(!audioUrl)throw new Error('O card Gerar lyric video precisa ficar depois de Gerar música da Kie.ai. A primeira faixa ainda não está disponível.');
+  const tracks=Array.from(new Set((Array.isArray(audios)?audios:[]).map(value=>String(value||'').trim()).filter(value=>/^https:\/\//i.test(value)))).slice(0,2);
+  if(tracks.length<2)throw new Error('O card Gerar lyric video precisa ficar depois de Gerar música da Kie.ai. As duas faixas ainda não estão disponíveis.');
   if(!lyrics)throw new Error('O lyric video não foi criado porque a letra deste pedido não está disponível.');
 
-  // O callback da Kie pode ser reenviado. Guardar o id por card torna a
-  // operação idempotente, sem criar dois vídeos para o mesmo pedido.
+  // O callback da Kie pode ser reenviado. Guardar os ids por card torna a
+  // operação idempotente, sem recriar o par de vídeos do mesmo pedido.
   const saved=context.flow_data?.lyric_videos?.[node.id];
-  if(saved?.order_id)return {lead,lyricVideo:saved,alreadyStarted:true,waitingLyricVideo:true};
-  const sourceOrderId=context.sourceOrderId||lead.external_order_id||null;
-  const lyricVideo=await submitLyricVideo({
-    db, ownerId:flow.owner_id, audioUrl, lyrics, orderId:sourceOrderId,
-    introText:String(config.introText||'').trim()||null, theme:config.theme||'romantic_rose',
-    gptApiKey:(await credentialsFor(db,flow.id,flow.owner_id)).gpt||process.env.OPENAI_API_KEY,
-  });
-  const flowData={...(context.flow_data||{}),lyric_videos:{...(context.flow_data?.lyric_videos||{}),[node.id]:{order_id:lyricVideo.id,status:lyricVideo.status,audio_url:audioUrl,created_at:new Date().toISOString()}}};
-  const execution={flow_id:flow.id,lyric_video_node_id:node.id,lyric_video_order_id:lyricVideo.id};
+  if(Array.isArray(saved?.order_ids)&&saved.order_ids.length===2)return {lead,lyricVideo:saved,alreadyStarted:true,waitingLyricVideo:true};
+  const gptApiKey=(await credentialsFor(db,flow.id,flow.owner_id)).gpt||process.env.OPENAI_API_KEY;
+  const timestamps=await Promise.all(tracks.map(audioUrl=>createSyncedCaptionBlocks({audioUrl,lyrics,apiKey:gptApiKey})));
+  const backgroundUrl=`${String(process.env.APP_URL||'https://minifluxo.vercel.app').replace(/\/$/,'')}/lyric-video/sunset-children.jpg`;
+  const {data:orders,error:insertError}=await db.from('video_orders').insert(tracks.map((audioUrl,index)=>({
+    owner_id:flow.owner_id, lead_id:lead.id, flow_node_id:node.id, variant_index:index+1,
+    audio_url:audioUrl, photos:[], background_url:backgroundUrl, lyrics, lyrics_timestamps:timestamps[index],
+    intro_text:String(config.introText||'').trim()||null, status:'pending',
+  }))).select();
+  if(insertError||!orders||orders.length!==2)throw insertError||new Error('Não foi possível criar as duas filas de vídeo.');
+  try{await Promise.all(orders.map(order=>dispatchRemotionRender(order.id)));}
+  catch(error){await db.from('video_orders').update({status:'failed',error:`Falha ao iniciar GitHub Actions: ${String(error?.message||error)}`,updated_at:new Date().toISOString()}).in('id',orders.map(order=>order.id));throw error;}
+  const flowData={...(context.flow_data||{}),lyric_videos:{...(context.flow_data?.lyric_videos||{}),[node.id]:{order_ids:orders.map(order=>order.id),status:'rendering',audio_urls:tracks,background_url:backgroundUrl,created_at:new Date().toISOString()}}};
+  const execution={flow_id:flow.id,lyric_video_node_id:node.id,lyric_video_order_ids:orders.map(order=>order.id)};
   const {data:updated,error}=await db.from('leads').update({order_context:{...context,flow_data:flowData,flow_execution:execution},status:'generating_video',updated_at:new Date().toISOString()}).eq('id',lead.id).eq('owner_id',lead.owner_id).eq('connection_id',lead.connection_id).select().single();
   if(error)throw error;
-  return {lead:updated,lyricVideo,waitingLyricVideo:true};
+  return {lead:updated,lyricVideo:{order_ids:orders.map(order=>order.id)},waitingLyricVideo:true};
 }
 
 async function sendFlowMedia(db,flow,lead,connection,node,variables){
@@ -246,7 +252,7 @@ export async function executeFlow({db,flow,lead,connection,resumeAfterId=null,re
     if(kind==='purchaseNotification'){const notice=render(config.message||'Compra Feita',variables).trim()||'Compra Feita';await sendText(connection,PURCHASE_NOTIFICATION_PHONE,notice);}
     if(kind==='condition'){const matched=conditionMatches(config,variables);node=nextNode(nodes,edges,node.id,matched?'true':'false');if(!node)return {completed:false,reason:matched?'condition_true_path_missing':'condition_false_path_missing'};continue;}
     if(kind==='kie'){if(readyAudios.length){node=nextNode(nodes,edges,node.id);continue;}if(!variables.paid){await db.from('leads').update({status:'waiting_pix',updated_at:new Date().toISOString()}).eq('id',currentLead.id);return {waiting:true,reason:'payment_required'};}return startKie(db,flow,currentLead,node,variables);}
-    if(kind==='lyricVideo'){const result=await startLyricVideo(db,flow,currentLead,node,readyAudios);if(result.waitingLyricVideo)return {waiting:true,reason:'lyric_video_rendering',lyric_video_order_id:result.lyricVideo?.order_id||null};currentLead=result.lead;variables=variablesFor(currentLead,{audios:readyAudios});}
+    if(kind==='lyricVideo'){const result=await startLyricVideo(db,flow,currentLead,node,readyAudios);if(result.waitingLyricVideo)return {waiting:true,reason:'lyric_video_rendering',lyric_video_order_ids:result.lyricVideo?.order_ids||null};currentLead=result.lead;variables=variablesFor(currentLead,{audios:readyAudios});}
     if(kind==='media'){currentLead=await sendFlowMedia(db,flow,currentLead,connection,node,variables);variables=variablesFor(currentLead,{audios:readyAudios});}
     if(kind==='deliver'||kind==='previewDeliver'){
       if(!readyAudios.length)return {completed:false,reason:kind==='previewDeliver'?'preview_audio_not_ready':'audio_not_ready'};

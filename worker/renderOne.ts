@@ -4,6 +4,8 @@ import os from 'node:os';
 import { bundle } from '@remotion/bundler';
 import { renderMedia, selectComposition } from '@remotion/renderer';
 import { createTimeline } from '../src/video/timeline';
+import { ffprobeDuration } from '../src/services/ffmpeg';
+import { downloadAsset } from '../src/services/download';
 
 const apiUrl = process.env.WORKER_API_URL?.replace(/\/$/, '');
 const token = process.env.VIDEO_WORKER_TOKEN;
@@ -27,9 +29,12 @@ async function run() {
   const directory = await mkdtemp(path.join(os.tmpdir(), `remotion-${order.id}-`));
   try {
     const sources = await api({ action: 'input-urls', orderId: order.id });
+    const localAudio = await downloadAsset(sources.audioUrl, directory, 'audio');
+    const duration = await ffprobeDuration(localAudio);
+    if (!Number.isFinite(duration) || duration <= 0) throw new Error('Não foi possível ler a duração completa da música.');
     const timeline = createTimeline({
       audioUrl: sources.audioUrl, photos: sources.photoUrls, lyrics: order.lyrics,
-      lyricsTimestamps: order.lyrics_timestamps, introText: order.intro_text, duration: 60,
+      lyricsTimestamps: order.lyrics_timestamps, introText: order.intro_text, duration, backgroundUrl: sources.backgroundUrl,
     });
     await api({ action: 'status', orderId: order.id, status: 'rendering' });
     const serveUrl = await bundle({ entryPoint: path.resolve('src/video/RemotionRoot.tsx') });

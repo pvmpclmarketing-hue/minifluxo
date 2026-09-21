@@ -1,6 +1,6 @@
 export type MotionPreset = 'zoom_in' | 'zoom_out' | 'pan_left' | 'pan_right' | 'pan_up';
 export type TransitionPreset = 'crossfade' | 'blur_dissolve' | 'scale_dissolve';
-export type CaptionAnimation = 'instagram' | 'word_by_word';
+export type CaptionAnimation = 'instagram' | 'word_by_word' | 'lyric_build';
 
 export type TimedCaption = { start: number; end: number; text: string; position?: 'center' };
 export type TimelinePhoto = { url: string; start: number; end: number; motion: MotionPreset; transition: TransitionPreset };
@@ -8,6 +8,7 @@ export type VideoTimeline = {
   width: 1080; height: 1920; fps: 30; duration: number;
   audio: { url: string; start: number; volume: number };
   photos: TimelinePhoto[];
+  backgroundUrl?: string | null;
   lyrics: TimedCaption[];
   introText?: string | null;
   style: { captionAnimation: CaptionAnimation };
