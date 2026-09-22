@@ -62,13 +62,16 @@ export async function POST(request) {
       if (!config?.payment_generation_flow_id || config.owner_id !== item.owner_id) continue;
       const { data: flow } = await db.from('flows').select('*').eq('id', config.payment_generation_flow_id).eq('owner_id', item.owner_id).eq('status', 'active').maybeSingle();
       if (!flow) continue;
-      let claim = db.from('leads').update({
+      // A conexão cadastrada no Pix pode ter sido removida ou trocada entre o
+      // pagamento e a recuperação. O lead continua sendo o mesmo pedido e a
+      // conta já foi validada acima; portanto, reivindicamos pelo estado do
+      // pedido e migramos para a única conexão ativa, em vez de abandoná-lo.
+      const claim = db.from('leads').update({
         connection_id: connection.id,
         provider: connection.provider,
         order_context: { ...context, flow_execution: { flow_id: flow.id, recovered_unstarted_payment_at: new Date().toISOString() } },
         updated_at: new Date().toISOString(),
       }).eq('id', item.id).eq('owner_id', item.owner_id).eq('status', 'in_progress').is('kie_task_id', null);
-      claim = item.connection_id ? claim.eq('connection_id', item.connection_id) : claim.is('connection_id', null);
       const { data: claimed } = await claim.select().maybeSingle();
       if (!claimed) continue;
       await executeFlow({ db, flow, lead: claimed, connection });

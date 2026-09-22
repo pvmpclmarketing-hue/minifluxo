@@ -64,10 +64,17 @@ export async function POST(request) {
       db.from('flows').select('*').eq('id', claimed.flow_id).eq('owner_id', claimed.owner_id).maybeSingle(),
       db.from('connections').select('*').eq('id', claimed.connection_id).eq('owner_id', claimed.owner_id).maybeSingle(),
     ]);
-    if (!lead || !flow || !connection || connection.status !== 'connected') { processed.push({ txid, error: 'Execução não disponível.' }); continue; }
+    // A confirmação financeira não pode depender da sessão do WhatsApp. Primeiro
+    // transformamos o lead em um pagamento recuperável; se a conexão estiver
+    // indisponível, o cron retoma pela conexão ativa assim que ela voltar.
+    if (!lead) { processed.push({ txid, error: 'Lead do pagamento não encontrado.' }); continue; }
     const context = { ...(lead.order_context || {}), paid: true, efi_payment: payment, flow_execution: null };
-    const { data: paidLead, error: leadError } = await db.from('leads').update({ status: 'in_progress', order_context: context, updated_at: now }).eq('id', lead.id).eq('owner_id', claimed.owner_id).eq('connection_id', claimed.connection_id).select().single();
+    const { data: paidLead, error: leadError } = await db.from('leads').update({ status: 'in_progress', order_context: context, updated_at: now }).eq('id', lead.id).eq('owner_id', claimed.owner_id).select().single();
     if (leadError) { processed.push({ txid, error: leadError.message }); continue; }
+    if (!flow || !connection || connection.status !== 'connected') {
+      processed.push({ txid, queued: true, reason: 'WhatsApp indisponível; execução será retomada automaticamente.' });
+      continue;
+    }
     try {
       // Cobranças criadas pelo endpoint do site Efí carregam este marcador. Elas
       // devem iniciar o fluxo configurado em Disparos desde a entrada, exatamente
