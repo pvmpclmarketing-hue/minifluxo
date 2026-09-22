@@ -129,7 +129,11 @@ export async function POST(request) {
         }
         const isWaiting = Boolean(execution.wait_node_id || execution.delay_node_id || execution.kie_node_id || (execution.payment_node_id && !resumeAfterId));
         const retryable = !existing.kie_task_id && !isWaiting && ['new', 'in_progress', 'generating', 'failed', 'error'].includes(existing.status);
-        if (!resumeAfterId && !retryable) return NextResponse.json({ received: true, duplicate: true, execution_id: existing.id, status: existing.status });
+        // Um lead de remarketing existe antes da compra. O pagamento original
+        // precisa convertê-lo para o fluxo de entrega, mesmo que ele esteja
+        // aguardando uma resposta no menu de remarketing; tratá-lo como
+        // duplicado deixa uma venda confirmada sem música e sem disparo.
+        if (!pendingRemarketing && !resumeAfterId && !retryable) return NextResponse.json({ received: true, duplicate: true, execution_id: existing.id, status: existing.status });
         const { data, error } = await db.from('leads').update(leadValues).eq('id', existing.id).select().single();
         if (error) throw error;
         lead = data;

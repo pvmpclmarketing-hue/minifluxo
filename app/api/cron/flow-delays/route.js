@@ -35,7 +35,7 @@ export async function POST(request) {
     // promovido pelo webhook. Incluí-lo aqui torna a recuperação idêntica à
     // dos pagamentos Asaas caso a confirmação tenha sido gravada mas a
     // execução do fluxo não tenha começado.
-    .in('source', ['payment', 'site'])
+    .in('source', ['payment', 'site', 'site_remarketing'])
     .lt('updated_at', recoveryCutoff)
     .limit(50);
   if (unstartedError) return NextResponse.json({ error: unstartedError.message }, { status: 500 });
