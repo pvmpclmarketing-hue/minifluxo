@@ -106,22 +106,27 @@ export async function POST(request) {
     const leadValues = { name: body.customer.name, phone, music_request: musicRequest, status: 'in_progress', connection_id: connection.id, order_context: orderContext, updated_at: new Date().toISOString() };
     let lead;
     let resumeAfterId = null;
+    let promotedFromRemarketing = false;
     stage = 'idempotency_check';
     if (orderContext.sourceOrderId) {
-      const { data: existing } = await db.from('leads').select('id,status,kie_task_id,order_context').eq('owner_id', flow.owner_id).eq('external_order_id', orderContext.sourceOrderId).maybeSingle();
+      const { data: existing } = await db.from('leads').select('id,status,source,kie_task_id,music_url,order_context').eq('owner_id', flow.owner_id).eq('external_order_id', orderContext.sourceOrderId).maybeSingle();
       if (existing) {
         const execution = existing.order_context?.flow_execution || {};
-        // O lead de remarketing é criado antes do pagamento. Quando o Pix
-        // original é aprovado, ele precisa trocar para o fluxo de entrega — e
-        // nunca ser tratado como duplicado nem receber uma segunda abordagem.
-        const pendingRemarketing = existing.order_context?.remarketing?.origin === 'site_unpaid_pix' && !existing.order_context?.paid && !existing.kie_task_id;
+        // Remarketing representa somente um Pix ainda não pago. Assim que o
+        // pagamento original é confirmado, este mesmo pedido é promovido para
+        // a execução normal: cancela a agenda de remarketing, remove qualquer
+        // checkpoint daquele fluxo e inicia a entrega desde o primeiro card.
+        // `source` cobre leads antigos, e `origin` cobre os registros atuais.
+        const isRemarketingLead = existing.source === 'site_remarketing' || existing.order_context?.remarketing?.origin === 'site_unpaid_pix';
+        const pendingRemarketing = isRemarketingLead && !existing.order_context?.paid && !existing.kie_task_id && !existing.music_url;
         if (pendingRemarketing) {
+          promotedFromRemarketing = true;
           leadValues.order_context = {
             ...(existing.order_context || {}),
             ...orderContext,
             paid: true,
-            remarketing: { ...(existing.order_context?.remarketing || {}), cancelled_by_original_payment_at: new Date().toISOString() },
-            flow_execution: { flow_id: flow.id, original_payment_after_remarketing_at: new Date().toISOString() },
+            remarketing: { ...(existing.order_context?.remarketing || {}), state: 'cancelled_by_payment', cancelled_by_original_payment_at: new Date().toISOString() },
+            flow_execution: null,
           };
         } else if ((execution.payment_node_id && existing.status === 'waiting_payment') || (execution.kie_node_id && existing.status === 'waiting_pix')) {
           resumeAfterId = execution.payment_node_id || execution.kie_node_id;
@@ -134,7 +139,8 @@ export async function POST(request) {
         // aguardando uma resposta no menu de remarketing; tratá-lo como
         // duplicado deixa uma venda confirmada sem música e sem disparo.
         if (!pendingRemarketing && !resumeAfterId && !retryable) return NextResponse.json({ received: true, duplicate: true, execution_id: existing.id, status: existing.status });
-        const { data, error } = await db.from('leads').update(leadValues).eq('id', existing.id).select().single();
+        const values = pendingRemarketing ? { ...leadValues, source: 'payment' } : leadValues;
+        const { data, error } = await db.from('leads').update(values).eq('id', existing.id).select().single();
         if (error) throw error;
         lead = data;
       }
@@ -162,7 +168,7 @@ export async function POST(request) {
       }
       else await sendText(connection, phone, `Pagamento confirmado, ${body.customer.name}! Sua musica entrou na fila de criacao.`);
     }
-    return NextResponse.json({ received: true, execution_id: lead.id, flow_id: flowId, fulfillment_mode: mode, preview_tracks: audios.length });
+    return NextResponse.json({ received: true, execution_id: lead.id, flow_id: flowId, fulfillment_mode: mode, preview_tracks: audios.length, promoted_from_remarketing: promotedFromRemarketing });
   } catch (error) {
     console.error('[payment webhook] failed', { stage, error: error?.message || String(error) });
     return NextResponse.json({ error: error.message }, { status: 500 });
