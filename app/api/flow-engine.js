@@ -221,11 +221,14 @@ async function sendFlowMedia(db,flow,lead,connection,node,variables){
   const {data,error}=await db.storage.from('video-inputs').createSignedUrl(path,60*60*12);
   if(error||!data?.signedUrl)throw error||new Error('Não foi possível acessar a mídia deste card.');
   const caption=render(config.caption||'',variables);
-  await sendMedia(connection,lead.phone,type,data.signedUrl,caption);
-  const context=lead.order_context||{};
+  const result=await sendMedia(connection,lead.phone,type,data.signedUrl,caption);
+  const messageId=String(result?.messages?.[0]?.id||result?.data?.messages?.[0]?.id||`media-${node.id}-${Date.now()}`);
+  let currentLead=await appendChatMessage(db,lead,{id:messageId,direction:'out',type,url:data.signedUrl,text:caption||`📎 ${type==='video'?'Vídeo':'Imagem'} enviada`});
+  const context=currentLead.order_context||{};
   const saveTo=/^[a-zA-Z0-9_.]+$/.test(config.saveTo||'media')?config.saveTo||'media':'media';
-  const flowData=setAt(context.flow_data,saveTo,{type,file_name:String(config.fileName||''),sent_at:new Date().toISOString()});
-  const {data:updated,error:updateError}=await db.from('leads').update({order_context:{...context,flow_data:flowData,flow_execution:null},status:'in_progress',updated_at:new Date().toISOString()}).eq('id',lead.id).eq('owner_id',lead.owner_id).eq('connection_id',connection.id).select().single();
+  const flowData=setAt(context.flow_data,saveTo,{type,file_name:String(config.fileName||''),sent_at:new Date().toISOString(),message_id:messageId});
+  const delivery={...(context.delivery||{}),message_ids:{...(context.delivery?.message_ids||{}),[`media:${node.id}`]:{id:messageId,status:'sent',sent_at:new Date().toISOString(),type}},media:{...(context.delivery?.media||{}),[node.id]:{id:messageId,type,url:data.signedUrl,sent_at:new Date().toISOString()}}};
+  const {data:updated,error:updateError}=await db.from('leads').update({order_context:{...context,delivery,flow_data:flowData,flow_execution:null},status:'in_progress',updated_at:new Date().toISOString()}).eq('id',currentLead.id).eq('owner_id',currentLead.owner_id).eq('connection_id',connection.id).select().single();
   if(updateError)throw updateError;
   return updated;
 }
