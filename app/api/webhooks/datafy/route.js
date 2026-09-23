@@ -43,12 +43,17 @@ async function trackDeliveryStatus(db,connection,status){
 async function resumeMessage(db, connection, message, contact) {
   const phone = String(message?.from || contact?.wa_id || '').replace(/\D/g, '');
   const text = incomingText(message);
-  if (!phone || !text) return { ignored: true, reason: 'unsupported_message' };
+  if (!phone) return { ignored: true, reason: 'message_without_phone' };
   const { data: latest } = await db.from('leads')
     .select('*').eq('connection_id', connection.id).eq('phone', phone)
     .order('updated_at', { ascending: false }).limit(1).maybeSingle();
   if (!latest) return { ignored: true, reason: 'no_lead' };
-  const existing=await appendChatMessage(db,latest,{id:message?.id,direction:'in',type:message?.type||'text',text,created_at:message?.timestamp?new Date(Number(message.timestamp)*1000).toISOString():undefined});
+  // Para a resposta ao template, qualquer interação abre a janela de 24h:
+  // texto, botão, áudio, imagem, documento ou figurinha. Preservamos um
+  // marcador legível no chat quando a mensagem não tem corpo textual.
+  const messageType = String(message?.type || 'text');
+  const messageText = text || `[${messageType} recebido]`;
+  const existing=await appendChatMessage(db,latest,{id:message?.id,direction:'in',type:messageType,text:messageText,created_at:message?.timestamp?new Date(Number(message.timestamp)*1000).toISOString():undefined});
   if (existing.status!=='waiting_response') return { received: true, ignored: true, reason: 'no_waiting_flow' };
 
   const context = { ...(existing.order_context || {}), last_message: text };
@@ -84,6 +89,10 @@ async function resumeMessage(db, connection, message, contact) {
     if (!claimed) return { ignored: true, reason: 'template_response_already_claimed' };
     return executeFlow({ db, flow, lead: claimed, connection });
   }
+
+  // Fora da etapa de template, fluxos com menus continuam aceitando apenas
+  // texto ou respostas interativas que possam ser associadas a uma escolha.
+  if (!text) return { received: true, ignored: true, reason: 'unsupported_message_for_menu' };
 
   let resumeAfterId = execution.wait_node_id;
   let resumeHandle = null;
