@@ -63,6 +63,11 @@ export async function sendText(connection,phone,text){
   if(connection.provider==='meta')return sendOfficialWhatsApp({messaging_product:'whatsapp',to:phone,type:'text',text:{body:text}});
   return uazSendWithPhoneFallback(connection,phone,'/send/text',{text});
 }
+export async function sendTemplate(connection,phone,name='flow',languageCode='en_US'){
+  if(!connection)throw new Error('Conecte um WhatsApp antes de enviar o template.');
+  if(connection.provider!=='meta')throw new Error('Templates aprovados só estão disponíveis na API oficial.');
+  return sendOfficialWhatsApp({messaging_product:'whatsapp',to:phone,type:'template',template:{name:String(name),language:{code:String(languageCode)}}});
+}
 export async function sendMenu(connection,phone,text,choices){
   if(!connection)throw new Error('Conecte um WhatsApp antes de enviar o menu.');
   // A API oficial permite até três botões de resposta rápida. Para menus

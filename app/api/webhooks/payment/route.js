@@ -1,8 +1,9 @@
 import { NextResponse } from 'next/server';
 import { adminClient } from '../../supabase';
-import { sendText } from '../../provider';
+import { sendTemplate, sendText } from '../../provider';
 import { executeFlow } from '../../flow-engine';
 import { resolveOfficialSiteConnection } from '../../site-connection';
+import { appendChatMessage } from '../../chat-history';
 
 function urlsFrom(value, result = new Set()) {
   if (!value) return result;
@@ -154,6 +155,23 @@ export async function POST(request) {
     if (connection.status === 'connected') {
       const { data: executionFlow } = await db.from('flows').select('*').eq('id', flowId).eq('owner_id', config.owner_id).maybeSingle();
       if (executionFlow?.status === 'active') {
+        // A API oficial só permite mídia livre dentro da janela de 24 horas.
+        // O template aprovado reabre a conversa e o webhook retoma o fluxo
+        // após a primeira resposta do cliente.
+        if (connection.provider === 'meta') {
+          const templateName = process.env.WHATSAPP_PAYMENT_TEMPLATE_NAME || 'flow';
+          const templateLanguage = process.env.WHATSAPP_PAYMENT_TEMPLATE_LANGUAGE || 'en_US';
+          const templateResult = await sendTemplate(connection, phone, templateName, templateLanguage);
+          const templateMessageId = String(templateResult?.messages?.[0]?.id || templateResult?.data?.messages?.[0]?.id || `template-${Date.now()}`);
+          const templateLead = await appendChatMessage(db, lead, { id: templateMessageId, direction: 'out', type: 'text', text: 'Olá! Tudo bem? 😊\n\nPosso enviar sua música? Me responda que já inicio o processo!' });
+          const { error: gateError } = await db.from('leads').update({
+            status: 'waiting_response',
+            order_context: { ...(templateLead.order_context || {}), flow_execution: { flow_id: flowId, reengagement_template: true, template_message_id: templateMessageId } },
+            updated_at: new Date().toISOString(),
+          }).eq('id', templateLead.id).eq('owner_id', templateLead.owner_id).eq('connection_id', connection.id);
+          if (gateError) throw gateError;
+          return NextResponse.json({ received: true, execution_id: lead.id, flow_id: flowId, waiting_for_template_reply: true });
+        }
         const result = await executeFlow({ db, flow: executionFlow, lead, connection, audios, resumeAfterId });
         console.info('[payment webhook] flow execution finished', { lead_id: lead.id, result });
       }

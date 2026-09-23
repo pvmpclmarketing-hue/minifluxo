@@ -55,6 +55,16 @@ async function resumeMessage(db, connection, message, contact) {
   const { data: flow } = await db.from('flows').select('*').eq('id', execution.flow_id).eq('owner_id', existing.owner_id).maybeSingle();
   if (!flow?.status || flow.status !== 'active') return { ignored: true, reason: 'flow_unavailable' };
 
+  // A resposta ao template aprovado abre a janela de 24 horas. Nesse caso o
+  // fluxo precisa começar do início, sem interpretar a resposta como menu.
+  if (execution.reengagement_template) {
+    const { data: claimed } = await db.from('leads').update({
+      status: 'in_progress', order_context: { ...context, flow_execution: null }, updated_at: new Date().toISOString(),
+    }).eq('id', existing.id).eq('owner_id', existing.owner_id).eq('connection_id', connection.id).eq('status', 'waiting_response').select().maybeSingle();
+    if (!claimed) return { ignored: true, reason: 'template_response_already_claimed' };
+    return executeFlow({ db, flow, lead: claimed, connection });
+  }
+
   let resumeAfterId = execution.wait_node_id;
   let resumeHandle = null;
   if (execution.menu_node_id) {
