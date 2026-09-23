@@ -7,6 +7,7 @@ import FlowCanvas from './flow-canvas';
 import ConnectionsPanel, { ConnectionCreationModal } from './connections-panel';
 import EfiWebhookButton from './efi-webhook-button';
 import VideoPanel from './video-panel';
+import LiveChat from './live-chat';
 
 const labels={waiting_pix:'Aguardando Pix',waiting_payment:'Aguardando pagamento',waiting_briefing:'Aguardando briefing',waiting_response:'Aguardando resposta',generating:'Gerando musica',generation_failed:'Falha na geração',delivering:'Entregando música',delivery_failed:'Falha na entrega',timed_out:'Encerrado por tempo limite',completed:'Entregue',in_progress:'Em andamento'};
 const contactSources={inbound:'Chamou primeiro',manual:'Chamado por disparo',site:'Chamado pelo site',payment:'Chamado apos pagamento'};
@@ -31,9 +32,9 @@ export default function Dashboard({initialTab='dashboard',userEmail,initialLeads
 
   const connected=connections.find(item=>item.status==='connected');
   const metrics=useMemo(()=>({total:leads.length,waiting:leads.filter(item=>item.status!=='completed').length,complete:leads.filter(item=>item.status==='completed').length}),[leads]);
-  const titles={dashboard:'Dashboard',flows:'Fluxos',connections:'Conexoes',leads:'Atendimentos',contacts:'Historico de contatos',dispatches:'Disparos',videos:'Lyric videos',apis:'APIs',webhooks:'Webhooks'};
+  const titles={dashboard:'Dashboard',flows:'Fluxos',connections:'Conexoes',leads:'Atendimentos',contacts:'Historico de contatos',chat:'Chat ao vivo',dispatches:'Disparos',videos:'Lyric videos',apis:'APIs',webhooks:'Webhooks'};
   const title=tab==='flow'?selected?.name:titles[tab];
-  const menu=[['dashboard','Dashboard'],['flows','Fluxos'],['connections','Conexoes'],['leads','Atendimentos'],['contacts','Historico de contatos'],['dispatches','Disparos'],['videos','Lyric videos'],['apis','APIs'],['webhooks','Webhooks']];
+  const menu=[['dashboard','Dashboard'],['flows','Fluxos'],['connections','Conexoes'],['leads','Atendimentos'],['contacts','Historico de contatos'],['chat','Chat ao vivo'],['dispatches','Disparos'],['videos','Lyric videos'],['apis','APIs'],['webhooks','Webhooks']];
 
   async function submit(url,event,done){
     event.preventDefault();setError('');
@@ -67,6 +68,7 @@ export default function Dashboard({initialTab='dashboard',userEmail,initialLeads
       {tab==='flow'&&(selected?<FlowCanvas flow={selected}/>:<Empty text="Crie seu primeiro fluxo."/>)}
       {tab==='leads'&&<Leads leads={leads} retry={retryDelivery} retryFlow={retryFlow}/>}
       {tab==='contacts'&&<ContactsHistoryWithDelete leads={leads} remove={deleteContact}/>}
+      {tab==='chat'&&<LiveChat/>}
       {tab==='connections'&&<ConnectionsPanel items={connections} onConnectionsChange={setConnections}/>}
       {tab==='dispatches'&&<Dispatches connections={connections} flows={flows} configs={configs} save={saveConfig}/>}
       {tab==='videos'&&<VideoPanel initialVideos={initialVideos}/>}

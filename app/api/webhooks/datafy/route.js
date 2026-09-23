@@ -2,6 +2,7 @@ import { createHmac, timingSafeEqual } from 'crypto';
 import { NextResponse } from 'next/server';
 import { adminClient } from '../../supabase';
 import { executeFlow, resolveMenuChoice } from '../../flow-engine';
+import { appendChatMessage } from '../../chat-history';
 
 export const runtime = 'nodejs';
 
@@ -30,10 +31,12 @@ async function resumeMessage(db, connection, message, contact) {
   const phone = String(message?.from || contact?.wa_id || '').replace(/\D/g, '');
   const text = incomingText(message);
   if (!phone || !text) return { ignored: true, reason: 'unsupported_message' };
-  const { data: existing } = await db.from('leads')
-    .select('*').eq('connection_id', connection.id).eq('phone', phone).eq('status', 'waiting_response')
+  const { data: latest } = await db.from('leads')
+    .select('*').eq('connection_id', connection.id).eq('phone', phone)
     .order('updated_at', { ascending: false }).limit(1).maybeSingle();
-  if (!existing) return { ignored: true, reason: 'no_waiting_lead' };
+  if (!latest) return { ignored: true, reason: 'no_lead' };
+  const existing=await appendChatMessage(db,latest,{id:message?.id,direction:'in',type:message?.type||'text',text,created_at:message?.timestamp?new Date(Number(message.timestamp)*1000).toISOString():undefined});
+  if (existing.status!=='waiting_response') return { received: true, ignored: true, reason: 'no_waiting_flow' };
 
   const context = { ...(existing.order_context || {}), last_message: text };
   const execution = context.flow_execution || {};

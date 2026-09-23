@@ -9,7 +9,7 @@ export const fetchCache = 'force-no-store';
 
 export default async function DashboardPage({ searchParams }) {
   const query = await searchParams;
-  const validTabs = new Set(['dashboard','flows','connections','leads','contacts','dispatches','videos','apis','webhooks']);
+  const validTabs = new Set(['dashboard','flows','connections','leads','contacts','chat','dispatches','videos','apis','webhooks']);
   const initialTab = validTabs.has(query?.tab) ? query.tab : 'dashboard';
   const jar = await cookies();
   const supabase = createServerClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY, { cookies: { getAll: () => jar.getAll() } });
