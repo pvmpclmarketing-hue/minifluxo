@@ -27,6 +27,18 @@ function incomingText(message) {
   return '';
 }
 
+async function trackDeliveryStatus(db,connection,status){
+  const messageId=String(status?.id||'');if(!messageId)return {ignored:true,reason:'status_without_message_id'};
+  const {data:leads,error}=await db.from('leads').select('id,owner_id,order_context').eq('connection_id',connection.id).order('updated_at',{ascending:false}).limit(500);
+  if(error)throw error;
+  const lead=(leads||[]).find(item=>Object.values(item.order_context?.delivery?.message_ids||{}).some(value=>String(value?.id||value)===messageId));
+  if(!lead)return {ignored:true,reason:'audio_message_not_found'};
+  const delivery=lead.order_context?.delivery||{};const message_statuses={...(delivery.message_statuses||{}),[messageId]:{status:String(status.status||'sent'),timestamp:status.timestamp?new Date(Number(status.timestamp)*1000).toISOString():new Date().toISOString(),recipient_id:String(status.recipient_id||''),errors:Array.isArray(status.errors)?status.errors.map(item=>({code:item.code,title:item.title,message:item.message})):[]}};
+  const {error:updateError}=await db.from('leads').update({order_context:{...(lead.order_context||{}),delivery:{...delivery,message_statuses}},updated_at:new Date().toISOString()}).eq('id',lead.id).eq('owner_id',lead.owner_id).eq('connection_id',connection.id);
+  if(updateError)throw updateError;
+  return {tracked:true,lead_id:lead.id,status:message_statuses[messageId].status};
+}
+
 async function resumeMessage(db, connection, message, contact) {
   const phone = String(message?.from || contact?.wa_id || '').replace(/\D/g, '');
   const text = incomingText(message);
@@ -85,6 +97,7 @@ export async function POST(request) {
         if (phoneNumberId && value.metadata?.phone_number_id && String(value.metadata.phone_number_id) !== phoneNumberId) continue;
         const contact = Array.isArray(value.contacts) ? value.contacts[0] : null;
         for (const message of Array.isArray(value.messages) ? value.messages : []) results.push(await resumeMessage(db, connection, message, contact));
+        for (const status of Array.isArray(value.statuses) ? value.statuses : []) results.push(await trackDeliveryStatus(db, connection, status));
       }
     }
     return NextResponse.json({ received: true, processed: results.length, results });
