@@ -3,7 +3,10 @@ const MAX_MESSAGES=120;
 export function messagesFor(lead){
   const saved=Array.isArray(lead?.order_context?.chat_messages)?lead.order_context.chat_messages:[];
   const legacy=lead?.order_context?.last_message;
-  return saved.length?saved:(legacy?[{id:'legacy-last-message',direction:'in',type:'text',text:String(legacy),created_at:lead.updated_at||lead.created_at}]:[]);
+  const delivery=lead?.order_context?.delivery||{};const ids=delivery.message_ids||{};const statuses=delivery.message_statuses||{};
+  const audio=(Array.isArray(delivery.sent_indexes)?delivery.sent_indexes:[]).map(index=>{const item=ids[index]||{};const id=String(item.id||`delivery-audio-${index}`);return {id,direction:'out',type:'audio',text:`🎵 Música ${Number(index)+1} de 2 enviada${statuses[id]?.status?` · ${statuses[id].status}`:''}`,created_at:item.sent_at||lead.updated_at||lead.created_at};}).filter(item=>!saved.some(message=>message.id===item.id));
+  const base=saved.length?saved:(legacy?[{id:'legacy-last-message',direction:'in',type:'text',text:String(legacy),created_at:lead.updated_at||lead.created_at}]:[]);
+  return [...base,...audio].sort((a,b)=>String(a.created_at).localeCompare(String(b.created_at)));
 }
 
 export async function appendChatMessage(db,lead,message){
