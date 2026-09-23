@@ -64,8 +64,22 @@ async function resumeMessage(db, connection, message, contact) {
   // fluxo sempre começa do início, sem interpretar a resposta como menu. Não
   // reenviamos mídia isolada: isso pularia os cards e quebraria a sequência.
   if (execution.reengagement_template) {
+    // A tentativa anterior pode ter salvo as faixas como "enviadas" mesmo se
+    // uma delas falhou ou se a conversa foi interrompida. Como este é um novo
+    // ciclo iniciado pelo template, zere apenas o progresso de entrega para
+    // que o card "Entregar música" envie novamente as duas faixas na ordem do
+    // fluxo. Mantemos os URLs e os recibos históricos para auditoria.
+    const previousDelivery = context.delivery || {};
+    const restartedDelivery = {
+      ...previousDelivery,
+      sent_indexes: [],
+      intro_sent: false,
+      message_ids: {},
+      restarted_at: new Date().toISOString(),
+      previous_message_ids: previousDelivery.message_ids || {},
+    };
     const { data: claimed } = await db.from('leads').update({
-      status: 'in_progress', order_context: { ...context, flow_execution: null, reengagement: { ...(context.reengagement || {}), replied_at: new Date().toISOString(), flow_restarted_at: new Date().toISOString() } }, updated_at: new Date().toISOString(),
+      status: 'in_progress', order_context: { ...context, delivery: restartedDelivery, flow_execution: null, reengagement: { ...(context.reengagement || {}), replied_at: new Date().toISOString(), flow_restarted_at: new Date().toISOString() } }, updated_at: new Date().toISOString(),
     }).eq('id', existing.id).eq('owner_id', existing.owner_id).eq('connection_id', connection.id).eq('status', 'waiting_response').select().maybeSingle();
     if (!claimed) return { ignored: true, reason: 'template_response_already_claimed' };
     return executeFlow({ db, flow, lead: claimed, connection });
