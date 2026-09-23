@@ -32,9 +32,35 @@ async function uazSendWithPhoneFallback(connection,phone,path,payload){
   throw lastError;
 }
 
+// A Datafy é um proxy oficial da Meta Cloud API. Ela preserva o mesmo payload
+// de mensagens, mas autentica com seu próprio token e usa outra URL base.
+// Mantemos o fallback nativo da Meta para instalações que não usam a Datafy.
+function officialWhatsAppConfig(){
+  const datafyToken=String(process.env.DATAFY_API_TOKEN||'').trim();
+  if(datafyToken)return {
+    name:'Datafy',
+    baseUrl:String(process.env.DATAFY_API_BASE_URL||'https://cloud.datafyapi.com.br/v1').replace(/\/$/,''),
+    token:datafyToken,
+    phoneNumberId:String(process.env.DATAFY_PHONE_NUMBER_ID||process.env.META_PHONE_NUMBER_ID||'').trim(),
+  };
+  return {
+    name:'Meta',
+    baseUrl:`https://graph.facebook.com/${process.env.META_API_VERSION||'v22.0'}`,
+    token:String(process.env.META_ACCESS_TOKEN||'').trim(),
+    phoneNumberId:String(process.env.META_PHONE_NUMBER_ID||'').trim(),
+  };
+}
+async function sendOfficialWhatsApp(payload){
+  const config=officialWhatsAppConfig();
+  if(!config.token||!config.phoneNumberId)throw new Error(`Configure o token e o Phone Number ID da ${config.name}.`);
+  const response=await fetch(`${config.baseUrl}/${encodeURIComponent(config.phoneNumberId)}/messages`,{method:'POST',headers:{Authorization:`Bearer ${config.token}`,'Content-Type':'application/json'},body:JSON.stringify(payload)});
+  if(!response.ok)throw new Error(`${config.name}: ${response.status} ${await response.text()}`);
+  return response.json();
+}
+
 export async function sendText(connection,phone,text){
   if(!connection)throw new Error('Conecte um WhatsApp antes de iniciar atendimentos.');
-  if(connection.provider==='meta'){const response=await fetch(`https://graph.facebook.com/${process.env.META_API_VERSION||'v22.0'}/${process.env.META_PHONE_NUMBER_ID}/messages`,{method:'POST',headers:{Authorization:`Bearer ${process.env.META_ACCESS_TOKEN}`,'Content-Type':'application/json'},body:JSON.stringify({messaging_product:'whatsapp',to:phone,type:'text',text:{body:text}})});if(!response.ok)throw new Error(`Meta: ${response.status} ${await response.text()}`);return response.json();}
+  if(connection.provider==='meta')return sendOfficialWhatsApp({messaging_product:'whatsapp',to:phone,type:'text',text:{body:text}});
   return uazSendWithPhoneFallback(connection,phone,'/send/text',{text});
 }
 export async function sendMenu(connection,phone,text,choices){
@@ -42,9 +68,7 @@ export async function sendMenu(connection,phone,text,choices){
   const options=(Array.isArray(choices)?choices:[]).slice(0,3).map((choice,index)=>({label:String(choice?.label||'').trim(),id:`menu-option-${index}`})).filter(choice=>choice.label);
   if(!options.length)throw new Error('Adicione ao menos uma opção ao card Menu.');
   if(connection.provider==='meta'){
-    const response=await fetch(`https://graph.facebook.com/${process.env.META_API_VERSION||'v22.0'}/${process.env.META_PHONE_NUMBER_ID}/messages`,{method:'POST',headers:{Authorization:`Bearer ${process.env.META_ACCESS_TOKEN}`,'Content-Type':'application/json'},body:JSON.stringify({messaging_product:'whatsapp',to:phone,type:'interactive',interactive:{type:'button',body:{text},action:{buttons:options.map(option=>({type:'reply',reply:{id:option.id,title:option.label.slice(0,20)}}))}}})});
-    if(!response.ok)throw new Error(`Meta: ${response.status} ${await response.text()}`);
-    return response.json();
+    return sendOfficialWhatsApp({messaging_product:'whatsapp',to:phone,type:'interactive',interactive:{type:'button',body:{text},action:{buttons:options.map(option=>({type:'reply',reply:{id:option.id,title:option.label.slice(0,20)}}))}}});
   }
   return uazSendWithPhoneFallback(connection,phone,'/send/menu',{type:'button',text,choices:options.map(option=>`${option.label}|${option.id}`)});
 }
@@ -59,7 +83,7 @@ export async function sendPixCopyButton(connection,phone,code,amount){
 }
 export async function sendAudio(connection,phone,audioUrl,caption=''){
   if(!connection)throw new Error('Conecte um WhatsApp antes de enviar o áudio.');
-  if(connection.provider==='meta'){const response=await fetch(`https://graph.facebook.com/${process.env.META_API_VERSION||'v22.0'}/${process.env.META_PHONE_NUMBER_ID}/messages`,{method:'POST',headers:{Authorization:`Bearer ${process.env.META_ACCESS_TOKEN}`,'Content-Type':'application/json'},body:JSON.stringify({messaging_product:'whatsapp',to:phone,type:'audio',audio:{link:audioUrl}})});if(!response.ok)throw new Error(`Meta: ${response.status} ${await response.text()}`);return response.json();}
+  if(connection.provider==='meta')return sendOfficialWhatsApp({messaging_product:'whatsapp',to:phone,type:'audio',audio:{link:audioUrl}});
   // A UazAPI aceita URL HTTPS. Repassar a URL assinada evita transformar
   // vídeos e áudios grandes em JSON base64, que pode ser recusado pelo
   // provedor como payload inválido.
@@ -71,9 +95,7 @@ export async function sendMedia(connection,phone,type,mediaUrl,caption=''){
   if(!connection)throw new Error('Conecte um WhatsApp antes de enviar a mídia.');
   if(!['image','video'].includes(type))throw new Error('Tipo de mídia inválido.');
   if(connection.provider==='meta'){
-    const response=await fetch(`https://graph.facebook.com/${process.env.META_API_VERSION||'v22.0'}/${process.env.META_PHONE_NUMBER_ID}/messages`,{method:'POST',headers:{Authorization:`Bearer ${process.env.META_ACCESS_TOKEN}`,'Content-Type':'application/json'},body:JSON.stringify({messaging_product:'whatsapp',to:phone,type,[type]:{link:mediaUrl,...(caption?{caption}:{})}})});
-    if(!response.ok)throw new Error(`Meta: ${response.status} ${await response.text()}`);
-    return response.json();
+    return sendOfficialWhatsApp({messaging_product:'whatsapp',to:phone,type,[type]:{link:mediaUrl,...(caption?{caption}:{})}});
   }
   if(!/^https:\/\//i.test(String(mediaUrl)))throw new Error('A URL da mídia precisa ser HTTPS.');
   return uazSendWithPhoneFallback(connection,phone,'/send/media',{type,file:mediaUrl,text:caption});
