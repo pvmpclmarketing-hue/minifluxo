@@ -10,7 +10,7 @@ export async function GET(){
     const user=await requireUser();const db=adminClient();
     const {data,error}=await db.from('leads').select('id,name,phone,status,source,connection_id,created_at,updated_at,order_context').eq('owner_id',user.id).not('connection_id','is',null).order('updated_at',{ascending:false}).limit(100);
     if(error)throw error;
-    return NextResponse.json({conversations:(data||[]).map(lead=>({...lead,messages:messagesFor(lead)}))});
+    return NextResponse.json({conversations:(data||[]).filter(lead=>!lead.order_context?.chat_archived_at).map(lead=>({...lead,messages:messagesFor(lead)}))});
   }catch(error){return NextResponse.json({error:error.message||'Não foi possível carregar as conversas.'},{status:500});}
 }
 
@@ -26,4 +26,15 @@ export async function POST(request){
     const updated=await appendChatMessage(db,lead,{direction:'out',type:'text',text});
     return NextResponse.json({conversation:{...updated,messages:messagesFor(updated)}});
   }catch(error){return NextResponse.json({error:error.message||'Não foi possível enviar a mensagem.'},{status:500});}
+}
+
+export async function DELETE(){
+  try{
+    const user=await requireUser();const db=adminClient();const cutoff=new Date(Date.now()-72*60*60*1000).toISOString();
+    const {data,error}=await db.from('leads').select('id,owner_id,order_context').eq('owner_id',user.id).lt('updated_at',cutoff).limit(1000);
+    if(error)throw error;
+    const eligible=(data||[]).filter(lead=>Array.isArray(lead.order_context?.chat_messages)||lead.order_context?.last_message);
+    await Promise.all(eligible.map(lead=>{const {chat_messages,last_message,...context}=lead.order_context||{};return db.from('leads').update({order_context:{...context,chat_archived_at:new Date().toISOString()},updated_at:new Date().toISOString()}).eq('id',lead.id).eq('owner_id',user.id);}));
+    return NextResponse.json({cleared:eligible.length,cutoff});
+  }catch(error){return NextResponse.json({error:error.message||'Não foi possível limpar as conversas.'},{status:500});}
 }
