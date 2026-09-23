@@ -83,9 +83,10 @@ export async function sendMenu(connection,phone,text,choices){
 export async function sendPixCopyButton(connection,phone,code,amount){
   if(!connection)throw new Error('Conecte um WhatsApp antes de enviar o Pix.');
   const text=`Seu Pix de R$ ${amount} está pronto. Toque em *Copiar código Pix* e cole no aplicativo do seu banco para pagar.`;
-  // A API oficial não expõe um botão nativo de cópia. Nela mantemos o código
-  // no texto para que o cliente ainda possa copiá-lo manualmente.
-  if(connection.provider==='meta')return sendText(connection,phone,`${text}\n\n${code}`);
+  // A API oficial não expõe botão nativo de cópia. Enviamos somente o payload
+  // EMV em uma mensagem isolada para o WhatsApp exibir a ação de copiar e
+  // evitar que o cliente copie qualquer texto explicativo por engano.
+  if(connection.provider==='meta')return sendText(connection,phone,String(code||''));
   // A UazAPI transforma copy: em ação nativa de copiar no WhatsApp.
   return uazSendWithPhoneFallback(connection,phone,'/send/menu',{type:'button',text,choices:[`Copiar código Pix|copy:${code}`],footerText:'Pagamento seguro via Pix'});
 }
