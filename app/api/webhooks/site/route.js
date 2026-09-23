@@ -2,23 +2,14 @@ import { NextResponse } from 'next/server';
 import { adminClient } from '../../supabase';
 import { sendText } from '../../provider';
 import { executeFlow } from '../../flow-engine';
-
-async function resolveConnection(db, body) {
-  if (body.integration_key) {
-    const {data:integration}=await db.from('site_integrations').select('connection_id').eq('integration_key',body.integration_key).maybeSingle();
-    if(integration?.connection_id)return (await db.from('connections').select('*').eq('id',integration.connection_id).maybeSingle()).data;
-    return (await db.from('connections').select('*').eq('site_integration_key',body.integration_key).maybeSingle()).data;
-  }
-  if (body.connection_id) return (await db.from('connections').select('*').eq('id',body.connection_id).maybeSingle()).data;
-  return null;
-}
+import { resolveOfficialSiteConnection } from '../../site-connection';
 
 export async function POST(request) {
   if (process.env.SITE_WEBHOOK_SECRET && request.headers.get('x-site-secret') !== process.env.SITE_WEBHOOK_SECRET) return new NextResponse(null,{status:401});
   const body=await request.json(); const phone=String(body.phone||'').replace(/\D/g,'');
   if(!body.name||!phone) return NextResponse.json({error:'name e phone sao obrigatorios.'},{status:400});
-  const db=adminClient(); const connection=await resolveConnection(db,body);
-  if(!connection)return NextResponse.json({error:'Informe uma integration_key valida.'},{status:400});
+  const db=adminClient(); const connection=await resolveOfficialSiteConnection(db,{integrationKey:body.integration_key,connectionId:body.connection_id});
+  if(!connection)return NextResponse.json({error:'Canal oficial do site não encontrado ou indisponível.'},{status:400});
   const {data:config}=await db.from('connection_flow_configs').select('site_flow_id,owner_id').eq('connection_id',connection.id).maybeSingle();
   if(config?.owner_id!==connection.owner_id)return NextResponse.json({error:'A configuração não pertence à conta desta conexão.'},{status:403});
   if(!config?.site_flow_id)return NextResponse.json({error:'Nenhum fluxo de site configurado para esta conexao.'},{status:404});

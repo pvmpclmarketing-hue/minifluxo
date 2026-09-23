@@ -2,16 +2,7 @@ import { NextResponse } from 'next/server';
 import { adminClient } from '../../supabase';
 import { sendText } from '../../provider';
 import { executeFlow } from '../../flow-engine';
-
-async function resolveConnection(db, body) {
-  if (body.integration_key) {
-    const { data: integration } = await db.from('site_integrations').select('connection_id').eq('integration_key', body.integration_key).maybeSingle();
-    if (integration?.connection_id) return (await db.from('connections').select('*').eq('id', integration.connection_id).maybeSingle()).data;
-    return (await db.from('connections').select('*').eq('site_integration_key', body.integration_key).maybeSingle()).data;
-  }
-  if (body.connection_id) return (await db.from('connections').select('*').eq('id', body.connection_id).maybeSingle()).data;
-  return null;
-}
+import { resolveOfficialSiteConnection } from '../../site-connection';
 
 function urlsFrom(value, result = new Set()) {
   if (!value) return result;
@@ -67,7 +58,7 @@ export async function POST(request) {
 
     stage = 'connection_resolution';
     const db = adminClient();
-    const connection = await resolveConnection(db, body);
+    const connection = await resolveOfficialSiteConnection(db, { integrationKey: body.integration_key, connectionId: body.connection_id });
     if (!connection) {
       console.warn('[payment webhook] rejected invalid integration', { order_id: orderId, has_integration_key: Boolean(body.integration_key), has_connection_id: Boolean(body.connection_id) });
       return NextResponse.json({ error: 'Informe uma integration_key valida.' }, { status: 400 });

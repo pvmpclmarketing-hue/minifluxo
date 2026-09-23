@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { timingSafeEqual } from 'crypto';
 import { adminClient } from '../../../supabase';
+import { resolveOfficialSiteConnection } from '../../../site-connection';
 
 // O site e o Mini Fluxo são serviços distintos e podem estar em fases de
 // rotação de segredo diferentes. Aceitamos somente os segredos privados já
@@ -16,13 +17,6 @@ function siteSecretMatches(value) {
   ].filter(Boolean).some((expected) => (
     received.length === expected.length && timingSafeEqual(Buffer.from(received), Buffer.from(expected))
   ));
-}
-
-async function resolveConnection(db, integrationKey) {
-  if (!integrationKey) return null;
-  const { data: integration } = await db.from('site_integrations').select('connection_id').eq('integration_key', integrationKey).maybeSingle();
-  if (integration?.connection_id) return (await db.from('connections').select('*').eq('id', integration.connection_id).maybeSingle()).data;
-  return (await db.from('connections').select('*').eq('site_integration_key', integrationKey).maybeSingle()).data;
 }
 
 // O site chama este endpoint somente depois que o QR Code foi criado. Ele não
@@ -49,8 +43,8 @@ export async function POST(request) {
     }
 
     const db = adminClient();
-    const connection = await resolveConnection(db, body.integration_key);
-    if (!connection) return NextResponse.json({ error: 'Informe uma integration_key valida.' }, { status: 400 });
+    const connection = await resolveOfficialSiteConnection(db, { integrationKey: body.integration_key, connectionId: body.connection_id });
+    if (!connection) return NextResponse.json({ error: 'Canal oficial do site não encontrado ou indisponível.' }, { status: 400 });
     const { data: config } = await db.from('connection_flow_configs').select('owner_id,remarketing_flow_id').eq('connection_id', connection.id).maybeSingle();
     if (!config?.remarketing_flow_id || config.owner_id !== connection.owner_id) return NextResponse.json({ error: 'Configure o fluxo de remarketing desta conexao.' }, { status: 409 });
     const { data: flow } = await db.from('flows').select('id,status').eq('id', config.remarketing_flow_id).eq('owner_id', config.owner_id).maybeSingle();

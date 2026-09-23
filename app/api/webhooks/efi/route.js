@@ -2,6 +2,7 @@ import { timingSafeEqual } from 'crypto';
 import { NextResponse } from 'next/server';
 import { adminClient } from '../../supabase';
 import { executeFlow } from '../../flow-engine';
+import { resolveOfficialSiteConnection } from '../../site-connection';
 
 export const runtime = 'nodejs';
 
@@ -59,17 +60,18 @@ export async function POST(request) {
     let sitePayment = null;
     try { sitePayment = await notifySitePayment(paymentLead, claimed, payment); }
     catch (error) { console.error('[efi webhook] site payment status failed', { txid, error: error?.message || String(error) }); }
-    const [{ data: lead }, { data: flow }, { data: connection }] = await Promise.all([
-      db.from('leads').select('*').eq('id', claimed.lead_id).eq('owner_id', claimed.owner_id).eq('connection_id', claimed.connection_id).maybeSingle(),
+    const [{ data: lead }, { data: flow }] = await Promise.all([
+      db.from('leads').select('*').eq('id', claimed.lead_id).eq('owner_id', claimed.owner_id).maybeSingle(),
       db.from('flows').select('*').eq('id', claimed.flow_id).eq('owner_id', claimed.owner_id).maybeSingle(),
-      db.from('connections').select('*').eq('id', claimed.connection_id).eq('owner_id', claimed.owner_id).maybeSingle(),
     ]);
     // A confirmação financeira não pode depender da sessão do WhatsApp. Primeiro
     // transformamos o lead em um pagamento recuperável; se a conexão estiver
     // indisponível, o cron retoma pela conexão ativa assim que ela voltar.
     if (!lead) { processed.push({ txid, error: 'Lead do pagamento não encontrado.' }); continue; }
+    const connection = await resolveOfficialSiteConnection(db, { connectionId: claimed.connection_id || lead.connection_id });
     const context = { ...(lead.order_context || {}), paid: true, efi_payment: payment, flow_execution: null };
-    const { data: paidLead, error: leadError } = await db.from('leads').update({ status: 'in_progress', order_context: context, updated_at: now }).eq('id', lead.id).eq('owner_id', claimed.owner_id).select().single();
+    const leadValues = { status: 'in_progress', order_context: context, updated_at: now, ...(connection ? { connection_id: connection.id, provider: connection.provider } : {}) };
+    const { data: paidLead, error: leadError } = await db.from('leads').update(leadValues).eq('id', lead.id).eq('owner_id', claimed.owner_id).select().single();
     if (leadError) { processed.push({ txid, error: leadError.message }); continue; }
     if (!flow || !connection || connection.status !== 'connected') {
       processed.push({ txid, queued: true, reason: 'WhatsApp indisponível; execução será retomada automaticamente.' });
