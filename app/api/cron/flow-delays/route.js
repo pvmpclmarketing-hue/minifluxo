@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { adminClient } from '../../supabase';
 import { executeFlow, recoverKieGeneration, retryKieDelivery } from '../../flow-engine';
+import { sendTemplate } from '../../provider';
+import { appendChatMessage } from '../../chat-history';
 
 export async function POST(request) {
   // Em instalações antigas o segredo exclusivo do cron pode não existir. O
@@ -22,6 +24,34 @@ export async function POST(request) {
   const { data: pending, error } = await db.from('leads').select('*').eq('status', 'waiting_delay').limit(100);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   let resumed = 0; let remarketingDispatched = 0; let recoveredKie = 0; let stopped = expired?.length || 0;
+  let reengagementTemplatesSent = 0;
+  // A Meta pode aceitar o envio da mídia e, em seguida, recusá-lo por ela
+  // estar fora da janela de 24 horas. Reabre automaticamente só esses casos
+  // com o template aprovado, sem tocar em entregas já aceitas.
+  const { data: responseWaiters, error: responseWaitersError } = await db.from('leads').select('*').eq('status', 'waiting_response').limit(200);
+  if (responseWaitersError) return NextResponse.json({ error: responseWaitersError.message }, { status: 500 });
+  for (const item of responseWaiters || []) {
+    const context = item.order_context || {}; const delivery = context.delivery || {};
+    const failedIndexes = Object.entries(delivery.message_ids || {}).filter(([, value]) => {
+      const status = delivery.message_statuses?.[String(value?.id || value)];
+      return status?.status === 'failed' && (status.errors || []).some((error) => Number(error?.code) === 131047);
+    }).map(([index]) => Number(index)).filter(Number.isInteger);
+    if (!context.paid || !failedIndexes.length || context.reengagement?.template_sent_at) continue;
+    try {
+      const { data: connection } = await db.from('connections').select('*').eq('id', item.connection_id).eq('owner_id', item.owner_id).eq('provider', 'meta').eq('status', 'connected').maybeSingle();
+      const flowId = context.flow_execution?.flow_id;
+      if (!connection || !flowId) continue;
+      const result = await sendTemplate(connection, item.phone, process.env.WHATSAPP_PAYMENT_TEMPLATE_NAME || 'flow', process.env.WHATSAPP_PAYMENT_TEMPLATE_LANGUAGE || 'en_US');
+      const messageId = String(result?.messages?.[0]?.id || result?.data?.messages?.[0]?.id || `template-${Date.now()}`);
+      const withHistory = await appendChatMessage(db, item, { id: messageId, direction: 'out', type: 'text', text: 'Olá! Tudo bem? 😊\n\nPosso enviar sua música? Me responda que já inicio o processo!' });
+      const { error: updateError } = await db.from('leads').update({
+        order_context: { ...(withHistory.order_context || {}), reengagement: { ...(context.reengagement || {}), template_sent_at: new Date().toISOString(), template_message_id: messageId }, flow_execution: { ...(context.flow_execution || {}), reengagement_template: true, retry_delivery_indexes: failedIndexes } },
+        updated_at: new Date().toISOString(),
+      }).eq('id', item.id).eq('owner_id', item.owner_id).eq('status', 'waiting_response');
+      if (updateError) throw updateError;
+      reengagementTemplatesSent += 1;
+    } catch (templateError) { console.error('[reengagement template] failed', { leadId: item.id, error: templateError.message }); }
+  }
   // Se o webhook de pagamento falhar entre criar o lead e iniciar a Kie, o
   // pedido fica pago, com letra, porém sem checkpoint nem taskId. Retomamos
   // exclusivamente esse estado inicial; isso não repete fluxos aguardando
@@ -225,7 +255,7 @@ export async function POST(request) {
       console.error('[kie delivery recovery] failed', { leadId: item.id, error: deliveryError.message });
     }
   }
-  return NextResponse.json({ received: true, resumed, remarketing_dispatched: remarketingDispatched, unstarted_payment_recovered: recoveredUnstarted, kie_recovered: recoveredKie, lyric_video_recovered: recoveredLyricVideos, delivery_recovered: recoveredDelivery, timed_out: stopped, timeout_hours: timeoutHours });
+  return NextResponse.json({ received: true, resumed, remarketing_dispatched: remarketingDispatched, reengagement_templates_sent: reengagementTemplatesSent, unstarted_payment_recovered: recoveredUnstarted, kie_recovered: recoveredKie, lyric_video_recovered: recoveredLyricVideos, delivery_recovered: recoveredDelivery, timed_out: stopped, timeout_hours: timeoutHours });
 }
 
 // A Vercel chama Cron Jobs por GET. Mantemos POST para o gatilho seguro já
