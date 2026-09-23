@@ -3,7 +3,6 @@ import { NextResponse } from 'next/server';
 import { adminClient } from '../../supabase';
 import { executeFlow, resolveMenuChoice } from '../../flow-engine';
 import { appendChatMessage } from '../../chat-history';
-import { sendAudio } from '../../provider';
 
 export const runtime = 'nodejs';
 
@@ -62,29 +61,11 @@ async function resumeMessage(db, connection, message, contact) {
   if (!flow?.status || flow.status !== 'active') return { ignored: true, reason: 'flow_unavailable' };
 
   // A resposta ao template aprovado abre a janela de 24 horas. Nesse caso o
-  // fluxo precisa começar do início, sem interpretar a resposta como menu.
+  // fluxo sempre começa do início, sem interpretar a resposta como menu. Não
+  // reenviamos mídia isolada: isso pularia os cards e quebraria a sequência.
   if (execution.reengagement_template) {
-    const retryIndexes = Array.isArray(execution.retry_delivery_indexes) ? execution.retry_delivery_indexes.filter(Number.isInteger) : [];
-    if (retryIndexes.length) {
-      const delivery = context.delivery || {}; const audios = Array.isArray(delivery.audios) ? delivery.audios : [];
-      const sentIndexes = new Set(Array.isArray(delivery.sent_indexes) ? delivery.sent_indexes : []); const messageIds = { ...(delivery.message_ids || {}) };
-      let retriedLead = existing;
-      for (const index of retryIndexes) {
-        if (!audios[index]) continue;
-        const result = await sendAudio(connection, existing.phone, audios[index], `Música ${index + 1} de ${audios.length}`);
-        const messageId = String(result?.messages?.[0]?.id || result?.data?.messages?.[0]?.id || `audio-retry-${index}-${Date.now()}`);
-        messageIds[index] = { id: messageId, status: 'sent', sent_at: new Date().toISOString() };
-        sentIndexes.add(index);
-        retriedLead = await appendChatMessage(db, retriedLead, { id: messageId, direction: 'out', type: 'audio', url: audios[index], text: `🎵 Música ${index + 1} reenviada` });
-      }
-      const { error: retryError } = await db.from('leads').update({
-        status: 'completed', order_context: { ...(retriedLead.order_context || {}), delivery: { ...delivery, audios, sent_indexes: [...sentIndexes], message_ids: messageIds }, flow_execution: null, reengagement: { ...(context.reengagement || {}), replied_at: new Date().toISOString(), delivery_retried_at: new Date().toISOString() } }, updated_at: new Date().toISOString(),
-      }).eq('id', existing.id).eq('owner_id', existing.owner_id).eq('connection_id', connection.id).eq('status', 'waiting_response');
-      if (retryError) throw retryError;
-      return { received: true, resumed: 'blocked_delivery_retried' };
-    }
     const { data: claimed } = await db.from('leads').update({
-      status: 'in_progress', order_context: { ...context, flow_execution: null }, updated_at: new Date().toISOString(),
+      status: 'in_progress', order_context: { ...context, flow_execution: null, reengagement: { ...(context.reengagement || {}), replied_at: new Date().toISOString(), flow_restarted_at: new Date().toISOString() } }, updated_at: new Date().toISOString(),
     }).eq('id', existing.id).eq('owner_id', existing.owner_id).eq('connection_id', connection.id).eq('status', 'waiting_response').select().maybeSingle();
     if (!claimed) return { ignored: true, reason: 'template_response_already_claimed' };
     return executeFlow({ db, flow, lead: claimed, connection });
