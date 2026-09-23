@@ -65,12 +65,20 @@ export async function sendText(connection,phone,text){
 }
 export async function sendMenu(connection,phone,text,choices){
   if(!connection)throw new Error('Conecte um WhatsApp antes de enviar o menu.');
-  const options=(Array.isArray(choices)?choices:[]).slice(0,3).map((choice,index)=>({label:String(choice?.label||'').trim(),id:`menu-option-${index}`})).filter(choice=>choice.label);
+  // A API oficial permite até três botões de resposta rápida. Para menus
+  // maiores, usamos a lista nativa (até dez linhas), preservando o mesmo ID
+  // estável que o webhook usa para seguir a saída correta do canvas.
+  const options=(Array.isArray(choices)?choices:[]).slice(0,10).map((choice,index)=>({label:String(choice?.label||'').trim(),id:`menu-option-${index}`})).filter(choice=>choice.label);
   if(!options.length)throw new Error('Adicione ao menos uma opção ao card Menu.');
   if(connection.provider==='meta'){
-    return sendOfficialWhatsApp({messaging_product:'whatsapp',to:phone,type:'interactive',interactive:{type:'button',body:{text},action:{buttons:options.map(option=>({type:'reply',reply:{id:option.id,title:option.label.slice(0,20)}}))}}});
+    if(options.length<=3){
+      return sendOfficialWhatsApp({messaging_product:'whatsapp',to:phone,type:'interactive',interactive:{type:'button',body:{text},action:{buttons:options.map(option=>({type:'reply',reply:{id:option.id,title:option.label.slice(0,20)}}))}}});
+    }
+    return sendOfficialWhatsApp({messaging_product:'whatsapp',to:phone,type:'interactive',interactive:{type:'list',body:{text},action:{button:'Ver opções',sections:[{title:'Opções',rows:options.map(option=>({id:option.id,title:option.label.slice(0,24)}))}]}}});
   }
-  return uazSendWithPhoneFallback(connection,phone,'/send/menu',{type:'button',text,choices:options.map(option=>`${option.label}|${option.id}`)});
+  // A instância não oficial só possui botões neste conector. Mantemos as
+  // primeiras três escolhas para não alterar fluxos antigos.
+  return uazSendWithPhoneFallback(connection,phone,'/send/menu',{type:'button',text,choices:options.slice(0,3).map(option=>`${option.label}|${option.id}`)});
 }
 export async function sendPixCopyButton(connection,phone,code,amount){
   if(!connection)throw new Error('Conecte um WhatsApp antes de enviar o Pix.');
