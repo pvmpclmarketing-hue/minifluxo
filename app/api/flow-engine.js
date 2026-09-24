@@ -211,7 +211,7 @@ async function startLyricVideo(db,flow,lead,node,audios){
   return {lead:updated,lyricVideo:{order_ids:orders.map(order=>order.id)},waitingLyricVideo:true};
 }
 
-async function sendFlowMedia(db,flow,lead,connection,node,variables){
+async function sendFlowMedia(db,flow,lead,connection,node,variables,{waitForVideoReceipt=false}={}){
   const config=node.data?.config||{};
   const type=['image','video'].includes(config.mediaType)?config.mediaType:null;
   const storageUrl=String(config.mediaUrl||'').trim();
@@ -228,7 +228,8 @@ async function sendFlowMedia(db,flow,lead,connection,node,variables){
   const saveTo=/^[a-zA-Z0-9_.]+$/.test(config.saveTo||'media')?config.saveTo||'media':'media';
   const flowData=setAt(context.flow_data,saveTo,{type,file_name:String(config.fileName||''),sent_at:new Date().toISOString(),message_id:messageId});
   const delivery={...(context.delivery||{}),message_ids:{...(context.delivery?.message_ids||{}),[`media:${node.id}`]:{id:messageId,status:'sent',sent_at:new Date().toISOString(),type}},media:{...(context.delivery?.media||{}),[node.id]:{id:messageId,type,url:data.signedUrl,sent_at:new Date().toISOString()}}};
-  const {data:updated,error:updateError}=await db.from('leads').update({order_context:{...context,delivery,flow_data:flowData,flow_execution:null},status:'in_progress',updated_at:new Date().toISOString()}).eq('id',currentLead.id).eq('owner_id',currentLead.owner_id).eq('connection_id',connection.id).select().single();
+  const flowExecution=waitForVideoReceipt?{flow_id:flow.id,media_node_id:node.id,media_message_id:messageId,wait_for_media_delivery:true}:null;
+  const {data:updated,error:updateError}=await db.from('leads').update({order_context:{...context,delivery,flow_data:flowData,flow_execution:flowExecution},status:waitForVideoReceipt?'waiting_media_delivery':'in_progress',updated_at:new Date().toISOString()}).eq('id',currentLead.id).eq('owner_id',currentLead.owner_id).eq('connection_id',connection.id).select().single();
   if(updateError)throw updateError;
   return updated;
 }
@@ -258,12 +259,13 @@ export async function executeFlow({db,flow,lead,connection,resumeAfterId=null,re
     if(kind==='kie'){if(readyAudios.length){node=nextNode(nodes,edges,node.id);continue;}if(!variables.paid){await db.from('leads').update({status:'waiting_pix',updated_at:new Date().toISOString()}).eq('id',currentLead.id);return {waiting:true,reason:'payment_required'};}return startKie(db,flow,currentLead,node,variables);}
     if(kind==='lyricVideo'){const result=await startLyricVideo(db,flow,currentLead,node,readyAudios);if(result.waitingLyricVideo)return {waiting:true,reason:'lyric_video_rendering',lyric_video_order_ids:result.lyricVideo?.order_ids||null};currentLead=result.lead;variables=variablesFor(currentLead,{audios:readyAudios});}
     if(kind==='media'){
-      currentLead=await sendFlowMedia(db,flow,currentLead,connection,node,variables);
-      // A API confirma o upload antes de o WhatsApp terminar de preparar um
-      // vídeo no aparelho. Sem essa pequena janela, o card seguinte (em geral
-      // a mensagem final) pode aparecer antes do vídeo. Mantemos a sequência
-      // visual do canvas sem atrasar imagens ou fluxos que terminam no vídeo.
-      if(config.mediaType==='video'&&nextNode(nodes,edges,node.id))await wait(Math.max(500,Number(process.env.VIDEO_FOLLOWUP_DELAY_MS||2500)));
+      const waitsForVideoReceipt=config.mediaType==='video'&&Boolean(nextNode(nodes,edges,node.id));
+      currentLead=await sendFlowMedia(db,flow,currentLead,connection,node,variables,{waitForVideoReceipt:waitsForVideoReceipt});
+      // Só avançamos quando o webhook oficial confirmar que o vídeo foi
+      // enviado. Isso impede que a mensagem do próximo card apareça antes
+      // dele na conversa; o webhook retoma a partir deste card exatamente uma
+      // vez, mesmo quando chegarem recibos delivered/read adicionais.
+      if(waitsForVideoReceipt)return {waiting:true,reason:'media_delivery_receipt',message_id:currentLead.order_context?.flow_execution?.media_message_id||null};
       variables=variablesFor(currentLead,{audios:readyAudios});
     }
     if(kind==='deliver'||kind==='previewDeliver'){

@@ -19,7 +19,7 @@ export async function POST(request) {
   const timeoutAt = new Date(now - timeoutHours * 60 * 60 * 1000).toISOString();
   // Estas etapas deveriam avançar sem uma nova ação do cliente. Se ficarem presas,
   // encerramos somente esta execução para que ela nunca volte a enviar mensagens depois.
-  const { data: expired, error: expireError } = await db.from('leads').update({ status: 'timed_out', updated_at: new Date().toISOString() }).in('status', ['in_progress', 'generating', 'generating_video', 'delivering', 'delivery_failed', 'waiting_response', 'waiting_payment', 'waiting_pix', 'waiting_delay']).lt('updated_at', timeoutAt).select('id');
+  const { data: expired, error: expireError } = await db.from('leads').update({ status: 'timed_out', updated_at: new Date().toISOString() }).in('status', ['in_progress', 'generating', 'generating_video', 'delivering', 'delivery_failed', 'waiting_response', 'waiting_payment', 'waiting_pix', 'waiting_delay', 'waiting_media_delivery']).lt('updated_at', timeoutAt).select('id');
   if (expireError) return NextResponse.json({ error: expireError.message }, { status: 500 });
   const { data: pending, error } = await db.from('leads').select('*').eq('status', 'waiting_delay').limit(100);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });

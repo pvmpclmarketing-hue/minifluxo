@@ -29,14 +29,30 @@ function incomingText(message) {
 
 async function trackDeliveryStatus(db,connection,status){
   const messageId=String(status?.id||'');if(!messageId)return {ignored:true,reason:'status_without_message_id'};
-  const {data:leads,error}=await db.from('leads').select('id,owner_id,order_context').eq('connection_id',connection.id).order('updated_at',{ascending:false}).limit(500);
+  const {data:leads,error}=await db.from('leads').select('*').eq('connection_id',connection.id).order('updated_at',{ascending:false}).limit(500);
   if(error)throw error;
   const lead=(leads||[]).find(item=>Object.values(item.order_context?.delivery?.message_ids||{}).some(value=>String(value?.id||value)===messageId));
-  if(!lead)return {ignored:true,reason:'audio_message_not_found'};
-  const delivery=lead.order_context?.delivery||{};const message_statuses={...(delivery.message_statuses||{}),[messageId]:{status:String(status.status||'sent'),timestamp:status.timestamp?new Date(Number(status.timestamp)*1000).toISOString():new Date().toISOString(),recipient_id:String(status.recipient_id||''),errors:Array.isArray(status.errors)?status.errors.map(item=>({code:item.code,title:item.title,message:item.message})):[]}};
-  const {error:updateError}=await db.from('leads').update({order_context:{...(lead.order_context||{}),delivery:{...delivery,message_statuses}},updated_at:new Date().toISOString()}).eq('id',lead.id).eq('owner_id',lead.owner_id).eq('connection_id',connection.id);
+  if(!lead)return {ignored:true,reason:'flow_message_not_found'};
+  const delivery=lead.order_context?.delivery||{};
+  const receivedStatus=String(status.status||'sent');
+  const message_statuses={...(delivery.message_statuses||{}),[messageId]:{status:receivedStatus,timestamp:status.timestamp?new Date(Number(status.timestamp)*1000).toISOString():new Date().toISOString(),recipient_id:String(status.recipient_id||''),errors:Array.isArray(status.errors)?status.errors.map(item=>({code:item.code,title:item.title,message:item.message})):[]}};
+  const {data:updatedLead,error:updateError}=await db.from('leads').update({order_context:{...(lead.order_context||{}),delivery:{...delivery,message_statuses}},updated_at:new Date().toISOString()}).eq('id',lead.id).eq('owner_id',lead.owner_id).eq('connection_id',connection.id).select().single();
   if(updateError)throw updateError;
-  return {tracked:true,lead_id:lead.id,status:message_statuses[messageId].status};
+
+  // Um vídeo com próximo card mantém o fluxo parado até o recibo "sent" da
+  // API oficial. "delivered" e "read" também são aceitos para provedores que
+  // não emitem o primeiro estágio. O claim pelo status impede que os recibos
+  // seguintes reiniciem o mesmo trecho.
+  const execution=updatedLead.order_context?.flow_execution||{};
+  const videoReady=execution.wait_for_media_delivery&&String(execution.media_message_id||'')===messageId&&['sent','delivered','read'].includes(receivedStatus);
+  if(!videoReady||updatedLead.status!=='waiting_media_delivery')return {tracked:true,lead_id:updatedLead.id,status:receivedStatus};
+  const {data:flow}=await db.from('flows').select('*').eq('id',execution.flow_id).eq('owner_id',updatedLead.owner_id).eq('status','active').maybeSingle();
+  if(!flow)return {tracked:true,lead_id:updatedLead.id,status:receivedStatus,ignored:'flow_unavailable'};
+  const {data:claimed,error:claimError}=await db.from('leads').update({status:'in_progress',order_context:{...(updatedLead.order_context||{}),flow_execution:null,media_delivery:{message_id:messageId,status:receivedStatus,resumed_at:new Date().toISOString()}},updated_at:new Date().toISOString()}).eq('id',updatedLead.id).eq('owner_id',updatedLead.owner_id).eq('connection_id',connection.id).eq('status','waiting_media_delivery').select().maybeSingle();
+  if(claimError)throw claimError;
+  if(!claimed)return {tracked:true,lead_id:updatedLead.id,status:receivedStatus,ignored:'video_receipt_already_claimed'};
+  const result=await executeFlow({db,flow,lead:claimed,connection,resumeAfterId:execution.media_node_id});
+  return {tracked:true,lead_id:updatedLead.id,status:receivedStatus,flow_resumed:true,result};
 }
 
 async function resumeMessage(db, connection, message, contact) {
