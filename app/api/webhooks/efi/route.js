@@ -5,6 +5,7 @@ import { sendTemplate } from '../../provider';
 import { executeFlow } from '../../flow-engine';
 import { resolveOfficialSiteConnection } from '../../site-connection';
 import { appendChatMessage } from '../../chat-history';
+import { paymentTemplate } from '../../whatsapp-templates';
 
 export const runtime = 'nodejs';
 
@@ -91,9 +92,8 @@ export async function POST(request) {
           processed.push({ txid, queued: true, reason: 'Pagamento confirmado, mas o lead não possui telefone para o template.' });
           continue;
         }
-        const templateName = process.env.WHATSAPP_PAYMENT_TEMPLATE_NAME || 'flow';
-        const templateLanguage = process.env.WHATSAPP_PAYMENT_TEMPLATE_LANGUAGE || 'en_US';
-        const templateResult = await sendTemplate(connection, phone, templateName, templateLanguage);
+        const template = paymentTemplate();
+        const templateResult = await sendTemplate(connection, phone, template.name, template.language);
         const templateMessageId = String(templateResult?.messages?.[0]?.id || templateResult?.data?.messages?.[0]?.id || `template-${Date.now()}`);
         const templateLead = await appendChatMessage(db, paidLead, {
           id: templateMessageId,

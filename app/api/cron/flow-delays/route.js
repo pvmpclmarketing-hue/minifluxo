@@ -3,6 +3,7 @@ import { adminClient } from '../../supabase';
 import { executeFlow, recoverKieGeneration, retryKieDelivery } from '../../flow-engine';
 import { sendTemplate } from '../../provider';
 import { appendChatMessage } from '../../chat-history';
+import { paymentTemplate, recoveryTemplate, remarketingTemplate } from '../../whatsapp-templates';
 
 export async function POST(request) {
   // Em instalações antigas o segredo exclusivo do cron pode não existir. O
@@ -44,7 +45,8 @@ export async function POST(request) {
     try {
       const { data: connection } = await db.from('connections').select('*').eq('id', item.connection_id).eq('owner_id', item.owner_id).eq('provider', 'meta').eq('status', 'connected').maybeSingle();
       if (!connection || !execution.flow_id) continue;
-      const result = await sendTemplate(connection, item.phone, process.env.WHATSAPP_RECOVERY_TEMPLATE_NAME || 'ajuste', process.env.WHATSAPP_RECOVERY_TEMPLATE_LANGUAGE || 'en');
+      const template = recoveryTemplate();
+      const result = await sendTemplate(connection, item.phone, template.name, template.language);
       const messageId = String(result?.messages?.[0]?.id || result?.data?.messages?.[0]?.id || `adjustment-${Date.now()}`);
       const withHistory = await appendChatMessage(db, item, { id: messageId, direction: 'out', type: 'text', text: 'Pode confirmar se quer receber aqui mesmo?' });
       const { error: updateError } = await db.from('leads').update({
@@ -70,7 +72,8 @@ export async function POST(request) {
       const { data: connection } = await db.from('connections').select('*').eq('id', item.connection_id).eq('owner_id', item.owner_id).eq('provider', 'meta').eq('status', 'connected').maybeSingle();
       const flowId = context.flow_execution?.flow_id;
       if (!connection || !flowId) continue;
-      const result = await sendTemplate(connection, item.phone, process.env.WHATSAPP_PAYMENT_TEMPLATE_NAME || 'flow', process.env.WHATSAPP_PAYMENT_TEMPLATE_LANGUAGE || 'en_US');
+      const template = paymentTemplate();
+      const result = await sendTemplate(connection, item.phone, template.name, template.language);
       const messageId = String(result?.messages?.[0]?.id || result?.data?.messages?.[0]?.id || `template-${Date.now()}`);
       const withHistory = await appendChatMessage(db, item, { id: messageId, direction: 'out', type: 'text', text: 'Olá! Tudo bem? 😊\n\nPosso enviar sua música? Me responda que já inicio o processo!' });
       const { error: updateError } = await db.from('leads').update({
@@ -172,13 +175,8 @@ export async function POST(request) {
         // pelo webhook Datafy como reengagement_template e então iniciará o
         // fluxo Remarketing desde o primeiro card.
         if (connection.provider === 'meta') {
-          const templateName = String(process.env.WHATSAPP_REMARKETING_TEMPLATE_NAME || '').trim();
-          const templateLanguage = String(process.env.WHATSAPP_REMARKETING_TEMPLATE_LANGUAGE || 'en').trim();
-          if (!templateName) {
-            console.error('[site remarketing] template name is not configured');
-            continue;
-          }
-          const result = await sendTemplate(connection, item.phone, templateName, templateLanguage);
+          const template = remarketingTemplate();
+          const result = await sendTemplate(connection, item.phone, template.name, template.language);
           const messageId = String(result?.messages?.[0]?.id || result?.data?.messages?.[0]?.id || `remarketing-template-${Date.now()}`);
           const withHistory = await appendChatMessage(db, item, {
             id: messageId,
