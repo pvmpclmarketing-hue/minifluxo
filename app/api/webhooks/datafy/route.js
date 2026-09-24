@@ -17,6 +17,10 @@ function signatureIsValid(rawBody, timestamp, signature) {
 
 function incomingText(message) {
   if (message?.type === 'text') return String(message.text?.body || '').trim();
+  // Algumas integrações encaminham respostas rápidas como `button` em vez
+  // do formato `interactive` da Cloud API. Aceitar ambas evita que um clique
+  // legítimo no template seja salvo como uma mensagem vazia.
+  if (message?.type === 'button') return String(message.button?.payload || message.button?.text || '').trim();
   if (message?.type === 'interactive') return String(
     message.interactive?.button_reply?.id
       || message.interactive?.list_reply?.id
@@ -59,9 +63,17 @@ async function resumeMessage(db, connection, message, contact) {
   const phone = String(message?.from || contact?.wa_id || '').replace(/\D/g, '');
   const text = incomingText(message);
   if (!phone) return { ignored: true, reason: 'message_without_phone' };
-  const { data: latest } = await db.from('leads')
-    .select('*').eq('connection_id', connection.id).eq('phone', phone)
-    .order('updated_at', { ascending: false }).limit(1).maybeSingle();
+  // A Meta pode devolver um celular brasileiro sem o nono dígito em alguns
+  // eventos antigos. Buscamos somente as duas representações equivalentes,
+  // sempre dentro da conexão oficial ativa, para não associar conversas de
+  // números internacionais ou de outra conta.
+  const phoneCandidates = /^55\d{10}$/.test(phone)
+    ? [phone, `${phone.slice(0, 4)}9${phone.slice(4)}`]
+    : (/^55\d{11}$/.test(phone) ? [phone, `${phone.slice(0, 4)}${phone.slice(5)}`] : [phone]);
+  const { data: candidates } = await db.from('leads')
+    .select('*').eq('connection_id', connection.id).in('phone', phoneCandidates)
+    .order('updated_at', { ascending: false }).limit(2);
+  const latest = (candidates || [])[0];
   if (!latest) return { ignored: true, reason: 'no_lead' };
   // Para a resposta ao template, qualquer interação abre a janela de 24h:
   // texto, botão, áudio, imagem, documento ou figurinha. Preservamos um
@@ -69,7 +81,14 @@ async function resumeMessage(db, connection, message, contact) {
   const messageType = String(message?.type || 'text');
   const messageText = text || `[${messageType} recebido]`;
   const existing=await appendChatMessage(db,latest,{id:message?.id,direction:'in',type:messageType,text:messageText,created_at:message?.timestamp?new Date(Number(message.timestamp)*1000).toISOString():undefined});
-  if (existing.status!=='waiting_response') return { received: true, ignored: true, reason: 'no_waiting_flow' };
+  // O timeout serve para impedir novos envios automáticos, mas não pode
+  // descartar uma resposta humana ao template aprovado. Ao responder, a
+  // própria Meta abre a janela de 24 horas; por isso reabrimos apenas leads
+  // que ainda têm um checkpoint de fluxo, nunca um lead expirado aleatório.
+  const resumableStatus = ['waiting_response', 'timed_out'];
+  if (!resumableStatus.includes(existing.status) || !existing.order_context?.flow_execution?.flow_id) {
+    return { received: true, ignored: true, reason: 'no_waiting_flow' };
+  }
 
   const context = { ...(existing.order_context || {}), last_message: text };
   const execution = context.flow_execution || {};
@@ -96,7 +115,7 @@ async function resumeMessage(db, connection, message, contact) {
     };
     const { data: claimed } = await db.from('leads').update({
       status: 'in_progress', order_context: { ...context, delivery: restartedDelivery, flow_execution: null, reengagement: { ...(context.reengagement || {}), replied_at: new Date().toISOString(), flow_restarted_at: new Date().toISOString() } }, updated_at: new Date().toISOString(),
-    }).eq('id', existing.id).eq('owner_id', existing.owner_id).eq('connection_id', connection.id).eq('status', 'waiting_response').select().maybeSingle();
+    }).eq('id', existing.id).eq('owner_id', existing.owner_id).eq('connection_id', connection.id).in('status', resumableStatus).select().maybeSingle();
     if (!claimed) return { ignored: true, reason: 'template_response_already_claimed' };
     return executeFlow({ db, flow, lead: claimed, connection });
   }
@@ -125,7 +144,7 @@ async function resumeMessage(db, connection, message, contact) {
 
   const { data: claimed } = await db.from('leads').update({
     status: 'in_progress', order_context: context, updated_at: new Date().toISOString(),
-  }).eq('id', existing.id).eq('owner_id', existing.owner_id).eq('connection_id', connection.id).eq('status', 'waiting_response').select().maybeSingle();
+  }).eq('id', existing.id).eq('owner_id', existing.owner_id).eq('connection_id', connection.id).in('status', resumableStatus).select().maybeSingle();
   if (!claimed) return { ignored: true, reason: 'response_already_claimed' };
   return executeFlow({ db, flow, lead: claimed, connection, resumeAfterId, resumeHandle });
 }
