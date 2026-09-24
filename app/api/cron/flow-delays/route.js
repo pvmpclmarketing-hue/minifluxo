@@ -167,6 +167,48 @@ export async function POST(request) {
           db.from('connections').select('*').eq('id', item.connection_id).eq('owner_id', item.owner_id).eq('status', 'connected').maybeSingle(),
         ]);
         if (!flow || !connection) continue;
+        // Fora da janela de atendimento a API oficial só permite iniciar o
+        // contato por template aprovado. A resposta do cliente será tratada
+        // pelo webhook Datafy como reengagement_template e então iniciará o
+        // fluxo Remarketing desde o primeiro card.
+        if (connection.provider === 'meta') {
+          const templateName = String(process.env.WHATSAPP_REMARKETING_TEMPLATE_NAME || '').trim();
+          const templateLanguage = String(process.env.WHATSAPP_REMARKETING_TEMPLATE_LANGUAGE || 'en').trim();
+          if (!templateName) {
+            console.error('[site remarketing] template name is not configured');
+            continue;
+          }
+          const result = await sendTemplate(connection, item.phone, templateName, templateLanguage);
+          const messageId = String(result?.messages?.[0]?.id || result?.data?.messages?.[0]?.id || `remarketing-template-${Date.now()}`);
+          const withHistory = await appendChatMessage(db, item, {
+            id: messageId,
+            direction: 'out',
+            type: 'text',
+            text: 'Vimos que ainda não fez sua música especial!\nTemos uma super oferta de 9,90 para você agora!\n\nPodemos seguir?',
+          });
+          const { data: claimed } = await db.from('leads').update({
+            status: 'waiting_response',
+            order_context: {
+              ...(withHistory.order_context || {}),
+              remarketing: {
+                ...(remarketing || {}),
+                template_sent_at: new Date().toISOString(),
+                template_message_id: messageId,
+              },
+              flow_execution: {
+                flow_id: flow.id,
+                reengagement_template: true,
+                remarketing_template: true,
+                template_message_id: messageId,
+                remarketing_template_sent_at: new Date().toISOString(),
+              },
+            },
+            updated_at: new Date().toISOString(),
+          }).eq('id', item.id).eq('owner_id', item.owner_id).eq('status', 'waiting_delay').select().maybeSingle();
+          if (!claimed) continue;
+          remarketingDispatched += 1;
+          continue;
+        }
         const { data: claimed } = await db.from('leads').update({
           status: 'in_progress',
           order_context: {
