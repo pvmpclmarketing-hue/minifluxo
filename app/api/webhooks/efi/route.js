@@ -1,8 +1,10 @@
 import { timingSafeEqual } from 'crypto';
 import { NextResponse } from 'next/server';
 import { adminClient } from '../../supabase';
+import { sendTemplate } from '../../provider';
 import { executeFlow } from '../../flow-engine';
 import { resolveOfficialSiteConnection } from '../../site-connection';
+import { appendChatMessage } from '../../chat-history';
 
 export const runtime = 'nodejs';
 
@@ -78,6 +80,49 @@ export async function POST(request) {
       continue;
     }
     try {
+      // A API oficial só permite o envio de áudio e vídeo livres depois de uma
+      // mensagem recebida do cliente. Todo Pix Efí pago passa primeiro pelo
+      // template aprovado; o webhook da resposta recomeça o fluxo dentro da
+      // janela de 24 horas. Isto também impede que a Kie/entrega seja iniciada
+      // diretamente por um pagamento fora da janela.
+      if (connection.provider === 'meta') {
+        const phone = String(paidLead.phone || paidLead.phone_number || '').replace(/\D/g, '');
+        if (!phone) {
+          processed.push({ txid, queued: true, reason: 'Pagamento confirmado, mas o lead não possui telefone para o template.' });
+          continue;
+        }
+        const templateName = process.env.WHATSAPP_PAYMENT_TEMPLATE_NAME || 'flow';
+        const templateLanguage = process.env.WHATSAPP_PAYMENT_TEMPLATE_LANGUAGE || 'en_US';
+        const templateResult = await sendTemplate(connection, phone, templateName, templateLanguage);
+        const templateMessageId = String(templateResult?.messages?.[0]?.id || templateResult?.data?.messages?.[0]?.id || `template-${Date.now()}`);
+        const templateLead = await appendChatMessage(db, paidLead, {
+          id: templateMessageId,
+          direction: 'out',
+          type: 'text',
+          text: 'Olá! Tudo bem? 😊\n\nPosso enviar sua música? Me responda que já inicio o processo!',
+        });
+        const { error: gateError } = await db.from('leads').update({
+          status: 'waiting_response',
+          order_context: {
+            ...(templateLead.order_context || {}),
+            reengagement: {
+              ...(templateLead.order_context?.reengagement || {}),
+              initial_template_sent_at: now,
+              payment_template_sent_at: now,
+            },
+            flow_execution: {
+              flow_id: flow.id,
+              reengagement_template: true,
+              template_message_id: templateMessageId,
+              payment_source: 'efi',
+            },
+          },
+          updated_at: now,
+        }).eq('id', templateLead.id).eq('owner_id', templateLead.owner_id).eq('connection_id', connection.id);
+        if (gateError) throw gateError;
+        processed.push({ txid, ok: true, site_payment: sitePayment, waiting_for_template_reply: true });
+        continue;
+      }
       // Cobranças criadas pelo endpoint do site Efí carregam este marcador. Elas
       // devem iniciar o fluxo configurado em Disparos desde a entrada, exatamente
       // como um PAYMENT_APPROVED do Asaas. As cobranças antigas preservam o
