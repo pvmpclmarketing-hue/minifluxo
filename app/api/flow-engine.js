@@ -257,7 +257,15 @@ export async function executeFlow({db,flow,lead,connection,resumeAfterId=null,re
     if(kind==='condition'){const matched=conditionMatches(config,variables);node=nextNode(nodes,edges,node.id,matched?'true':'false');if(!node)return {completed:false,reason:matched?'condition_true_path_missing':'condition_false_path_missing'};continue;}
     if(kind==='kie'){if(readyAudios.length){node=nextNode(nodes,edges,node.id);continue;}if(!variables.paid){await db.from('leads').update({status:'waiting_pix',updated_at:new Date().toISOString()}).eq('id',currentLead.id);return {waiting:true,reason:'payment_required'};}return startKie(db,flow,currentLead,node,variables);}
     if(kind==='lyricVideo'){const result=await startLyricVideo(db,flow,currentLead,node,readyAudios);if(result.waitingLyricVideo)return {waiting:true,reason:'lyric_video_rendering',lyric_video_order_ids:result.lyricVideo?.order_ids||null};currentLead=result.lead;variables=variablesFor(currentLead,{audios:readyAudios});}
-    if(kind==='media'){currentLead=await sendFlowMedia(db,flow,currentLead,connection,node,variables);variables=variablesFor(currentLead,{audios:readyAudios});}
+    if(kind==='media'){
+      currentLead=await sendFlowMedia(db,flow,currentLead,connection,node,variables);
+      // A API confirma o upload antes de o WhatsApp terminar de preparar um
+      // vídeo no aparelho. Sem essa pequena janela, o card seguinte (em geral
+      // a mensagem final) pode aparecer antes do vídeo. Mantemos a sequência
+      // visual do canvas sem atrasar imagens ou fluxos que terminam no vídeo.
+      if(config.mediaType==='video'&&nextNode(nodes,edges,node.id))await wait(Math.max(500,Number(process.env.VIDEO_FOLLOWUP_DELAY_MS||2500)));
+      variables=variablesFor(currentLead,{audios:readyAudios});
+    }
     if(kind==='deliver'||kind==='previewDeliver'){
       if(!readyAudios.length)return {completed:false,reason:kind==='previewDeliver'?'preview_audio_not_ready':'audio_not_ready'};
       const intro=render(config.intro||(kind==='previewDeliver'?'Sua música está pronta! Vou enviar as duas faixas da sua prévia em áudio.':'Sua música está pronta! Vou enviar as duas faixas em áudio.'),variables);
