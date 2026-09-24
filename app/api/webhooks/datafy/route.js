@@ -39,12 +39,12 @@ async function trackDeliveryStatus(db,connection,status){
   const {data:updatedLead,error:updateError}=await db.from('leads').update({order_context:{...(lead.order_context||{}),delivery:{...delivery,message_statuses}},updated_at:new Date().toISOString()}).eq('id',lead.id).eq('owner_id',lead.owner_id).eq('connection_id',connection.id).select().single();
   if(updateError)throw updateError;
 
-  // Um vídeo com próximo card mantém o fluxo parado até o recibo "sent" da
-  // API oficial. "delivered" e "read" também são aceitos para provedores que
-  // não emitem o primeiro estágio. O claim pelo status impede que os recibos
-  // seguintes reiniciem o mesmo trecho.
+  // Um vídeo com próximo card mantém o fluxo parado até o recibo "delivered"
+  // (ou "read") da API oficial. "sent" só confirma que a Meta aceitou a
+  // solicitação; ainda não prova que o vídeo chegou ao WhatsApp do cliente.
+  // O claim pelo status impede que recibos posteriores reiniciem o trecho.
   const execution=updatedLead.order_context?.flow_execution||{};
-  const videoReady=execution.wait_for_media_delivery&&String(execution.media_message_id||'')===messageId&&['sent','delivered','read'].includes(receivedStatus);
+  const videoReady=execution.wait_for_media_delivery&&String(execution.media_message_id||'')===messageId&&['delivered','read'].includes(receivedStatus);
   if(!videoReady||updatedLead.status!=='waiting_media_delivery')return {tracked:true,lead_id:updatedLead.id,status:receivedStatus};
   const {data:flow}=await db.from('flows').select('*').eq('id',execution.flow_id).eq('owner_id',updatedLead.owner_id).eq('status','active').maybeSingle();
   if(!flow)return {tracked:true,lead_id:updatedLead.id,status:receivedStatus,ignored:'flow_unavailable'};
