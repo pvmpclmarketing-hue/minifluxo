@@ -30,6 +30,35 @@ export async function POST(request) {
   // com o template aprovado, sem tocar em entregas já aceitas.
   const { data: responseWaiters, error: responseWaitersError } = await db.from('leads').select('*').eq('status', 'waiting_response').limit(200);
   if (responseWaitersError) return NextResponse.json({ error: responseWaitersError.message }, { status: 500 });
+  let recoveryTemplatesSent = 0;
+  const recoveryAfterMs = Math.max(1, Number(process.env.WHATSAPP_RECOVERY_TEMPLATE_DELAY_MINUTES || 20)) * 60 * 1000;
+  // Quando o primeiro template de uma venda não recebe resposta, enviamos o
+  // template "ajuste" uma única vez. A resposta a qualquer um dos dois passa
+  // pelo mesmo webhook e reinicia a sequência normal da Kie.
+  for (const item of responseWaiters || []) {
+    const context = item.order_context || {};
+    const execution = context.flow_execution || {};
+    const reengagement = context.reengagement || {};
+    const initialSentAt = Date.parse(reengagement.initial_template_sent_at || '');
+    if (!context.paid || !execution.reengagement_template || execution.menu_node_id || reengagement.adjustment_template_sent_at || !Number.isFinite(initialSentAt) || now - initialSentAt < recoveryAfterMs) continue;
+    try {
+      const { data: connection } = await db.from('connections').select('*').eq('id', item.connection_id).eq('owner_id', item.owner_id).eq('provider', 'meta').eq('status', 'connected').maybeSingle();
+      if (!connection || !execution.flow_id) continue;
+      const result = await sendTemplate(connection, item.phone, process.env.WHATSAPP_RECOVERY_TEMPLATE_NAME || 'ajuste', process.env.WHATSAPP_RECOVERY_TEMPLATE_LANGUAGE || 'en');
+      const messageId = String(result?.messages?.[0]?.id || result?.data?.messages?.[0]?.id || `adjustment-${Date.now()}`);
+      const withHistory = await appendChatMessage(db, item, { id: messageId, direction: 'out', type: 'text', text: 'Pode confirmar se quer receber aqui mesmo?' });
+      const { error: updateError } = await db.from('leads').update({
+        order_context: {
+          ...(withHistory.order_context || {}),
+          reengagement: { ...reengagement, adjustment_template_sent_at: new Date().toISOString(), adjustment_template_message_id: messageId },
+          flow_execution: { ...execution, reengagement_template: true, adjustment_template: true, template_message_id: messageId },
+        },
+        updated_at: new Date().toISOString(),
+      }).eq('id', item.id).eq('owner_id', item.owner_id).eq('status', 'waiting_response');
+      if (updateError) throw updateError;
+      recoveryTemplatesSent += 1;
+    } catch (recoveryTemplateError) { console.error('[recovery template] failed', { leadId: item.id, error: recoveryTemplateError.message }); }
+  }
   for (const item of responseWaiters || []) {
     const context = item.order_context || {}; const delivery = context.delivery || {};
     const failedIndexes = Object.entries(delivery.message_ids || {}).filter(([, value]) => {
@@ -255,7 +284,7 @@ export async function POST(request) {
       console.error('[kie delivery recovery] failed', { leadId: item.id, error: deliveryError.message });
     }
   }
-  return NextResponse.json({ received: true, resumed, remarketing_dispatched: remarketingDispatched, reengagement_templates_sent: reengagementTemplatesSent, unstarted_payment_recovered: recoveredUnstarted, kie_recovered: recoveredKie, lyric_video_recovered: recoveredLyricVideos, delivery_recovered: recoveredDelivery, timed_out: stopped, timeout_hours: timeoutHours });
+  return NextResponse.json({ received: true, resumed, remarketing_dispatched: remarketingDispatched, recovery_templates_sent: recoveryTemplatesSent, reengagement_templates_sent: reengagementTemplatesSent, unstarted_payment_recovered: recoveredUnstarted, kie_recovered: recoveredKie, lyric_video_recovered: recoveredLyricVideos, delivery_recovered: recoveredDelivery, timed_out: stopped, timeout_hours: timeoutHours });
 }
 
 // A Vercel chama Cron Jobs por GET. Mantemos POST para o gatilho seguro já
@@ -263,3 +292,4 @@ export async function POST(request) {
 export async function GET(request) {
   return POST(request);
 }
+

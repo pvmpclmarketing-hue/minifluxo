@@ -166,7 +166,14 @@ export async function POST(request) {
           const templateLead = await appendChatMessage(db, lead, { id: templateMessageId, direction: 'out', type: 'text', text: 'Olá! Tudo bem? 😊\n\nPosso enviar sua música? Me responda que já inicio o processo!' });
           const { error: gateError } = await db.from('leads').update({
             status: 'waiting_response',
-            order_context: { ...(templateLead.order_context || {}), flow_execution: { flow_id: flowId, reengagement_template: true, template_message_id: templateMessageId } },
+            order_context: {
+              ...(templateLead.order_context || {}),
+              // Se o cliente não responder ao primeiro template, o cron envia
+              // o template de recuperação aprovado após o intervalo definido.
+              // Guardar este instante evita qualquer envio duplicado.
+              reengagement: { ...(templateLead.order_context?.reengagement || {}), initial_template_sent_at: new Date().toISOString() },
+              flow_execution: { flow_id: flowId, reengagement_template: true, template_message_id: templateMessageId },
+            },
             updated_at: new Date().toISOString(),
           }).eq('id', templateLead.id).eq('owner_id', templateLead.owner_id).eq('connection_id', connection.id);
           if (gateError) throw gateError;
