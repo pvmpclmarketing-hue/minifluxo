@@ -1,5 +1,5 @@
 import { createHmac, timingSafeEqual } from 'crypto';
-import { NextResponse } from 'next/server';
+import { after, NextResponse } from 'next/server';
 import { adminClient } from '../../supabase';
 import { executeFlow, resolveMenuChoice } from '../../flow-engine';
 import { appendChatMessage } from '../../chat-history';
@@ -150,14 +150,30 @@ async function resumeMessage(db, connection, message, contact) {
 }
 
 export async function POST(request) {
+  let payload;
   try {
     const rawBody = await request.text();
     if (!signatureIsValid(rawBody, request.headers.get('x-datafy-timestamp'), request.headers.get('x-datafy-signature-256'))) return new NextResponse(null, { status: 401 });
-    const payload = JSON.parse(rawBody);
-    const db = adminClient();
+    payload = JSON.parse(rawBody);
+  } catch (error) {
+    console.error('[datafy webhook] rejected', { error: error?.message || String(error) });
+    return NextResponse.json({ error: 'Webhook Datafy inválido.' }, { status: 400 });
+  }
+
+  // A Datafy exige um 200 em até 20s e reenfileira apenas três vezes. Criar
+  // música, assinar mídia e avançar cards pode levar mais que isso; portanto
+  // confirmamos a entrega imediatamente e executamos o fluxo depois da
+  // resposta. O checkpoint condicional do lead mantém idempotência se a
+  // plataforma repetir o mesmo evento durante uma falha transitória.
+  after(async () => {
+    try {
+      const db = adminClient();
     const phoneNumberId = String(process.env.DATAFY_PHONE_NUMBER_ID || process.env.META_PHONE_NUMBER_ID || '');
     const { data: connections } = await db.from('connections').select('*').eq('provider', 'meta').eq('status', 'connected').limit(2);
-    if ((connections || []).length !== 1) return NextResponse.json({ received: true, ignored: true, reason: 'official_connection_unavailable' });
+    if ((connections || []).length !== 1) {
+      console.warn('[datafy webhook] ignored', { reason: 'official_connection_unavailable', connection_count: (connections || []).length });
+      return;
+    }
     const connection = connections[0];
     const results = [];
     for (const entry of Array.isArray(payload.entry) ? payload.entry : []) {
@@ -169,9 +185,9 @@ export async function POST(request) {
         for (const status of Array.isArray(value.statuses) ? value.statuses : []) results.push(await trackDeliveryStatus(db, connection, status));
       }
     }
-    return NextResponse.json({ received: true, processed: results.length, results });
+    console.info('[datafy webhook] processed', { processed: results.length, results: results.map((result) => result?.reason || result?.lead_id || 'ok') });
   } catch (error) {
     console.error('[datafy webhook] failed', { error: error?.message || String(error) });
-    return NextResponse.json({ error: 'Falha ao processar webhook Datafy.' }, { status: 500 });
-  }
+  }});
+  return NextResponse.json({ received: true, queued: true });
 }
