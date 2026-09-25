@@ -172,7 +172,15 @@ export async function POST(request) {
               // o template de recuperação aprovado após o intervalo definido.
               // Guardar este instante evita qualquer envio duplicado.
               reengagement: { ...(templateLead.order_context?.reengagement || {}), initial_template_sent_at: new Date().toISOString() },
-              flow_execution: { flow_id: flowId, reengagement_template: true, template_message_id: templateMessageId },
+              // Quando este pagamento está retomando um card já existente,
+              // preserve o checkpoint. A resposta ao template da Meta deve
+              // avançar dali, sem voltar ao início e duplicar música/cartões.
+              flow_execution: {
+                flow_id: flowId,
+                reengagement_template: true,
+                template_message_id: templateMessageId,
+                ...(resumeAfterId ? { payment_node_id: resumeAfterId } : {}),
+              },
             },
             updated_at: new Date().toISOString(),
           }).eq('id', templateLead.id).eq('owner_id', templateLead.owner_id).eq('connection_id', connection.id);

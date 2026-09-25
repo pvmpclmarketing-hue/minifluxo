@@ -72,7 +72,20 @@ export async function POST(request) {
     // indisponível, o cron retoma pela conexão ativa assim que ela voltar.
     if (!lead) { processed.push({ txid, error: 'Lead do pagamento não encontrado.' }); continue; }
     const connection = await resolveOfficialSiteConnection(db, { connectionId: claimed.connection_id || lead.connection_id });
-    const context = { ...(lead.order_context || {}), paid: true, efi_payment: payment, flow_execution: null };
+    // `node_id` é o card "Pagamento confirmado" gravado quando o QR Code foi
+    // criado. Ele é o checkpoint correto para uma confirmação Efí: depois que
+    // o cliente responder ao template da Meta, o fluxo deve continuar *após*
+    // esse card (por exemplo, no lyric video), e nunca reiniciar a geração e
+    // a entrega das músicas desde o primeiro card.
+    const paymentNodeId = Array.isArray(flow?.nodes) && flow.nodes.some((node) => node?.id === claimed.node_id)
+      ? claimed.node_id
+      : null;
+    const context = {
+      ...(lead.order_context || {}),
+      paid: true,
+      efi_payment: payment,
+      flow_execution: paymentNodeId ? { flow_id: claimed.flow_id, payment_node_id: paymentNodeId } : null,
+    };
     const leadValues = { status: 'in_progress', order_context: context, updated_at: now, ...(connection ? { connection_id: connection.id, provider: connection.provider } : {}) };
     const { data: paidLead, error: leadError } = await db.from('leads').update(leadValues).eq('id', lead.id).eq('owner_id', claimed.owner_id).select().single();
     if (leadError) { processed.push({ txid, error: leadError.message }); continue; }
@@ -115,6 +128,7 @@ export async function POST(request) {
               reengagement_template: true,
               template_message_id: templateMessageId,
               payment_source: 'efi',
+              ...(paymentNodeId ? { payment_node_id: paymentNodeId } : {}),
             },
           },
           updated_at: now,

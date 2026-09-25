@@ -95,17 +95,21 @@ async function resumeMessage(db, connection, message, contact) {
   const { data: flow } = await db.from('flows').select('*').eq('id', execution.flow_id).eq('owner_id', existing.owner_id).maybeSingle();
   if (!flow?.status || flow.status !== 'active') return { ignored: true, reason: 'flow_unavailable' };
 
-  // A resposta ao template aprovado abre a janela de 24 horas. Nesse caso o
-  // fluxo sempre começa do início, sem interpretar a resposta como menu. Não
-  // reenviamos mídia isolada: isso pularia os cards e quebraria a sequência.
+  // A resposta ao template aprovado abre a janela de 24 horas. Para uma
+  // confirmação Pix que já possui `payment_node_id`, retomamos exatamente
+  // depois desse card; iniciar novamente pela entrada recriava a música,
+  // repetia os áudios e deixava o lyric video fora da fila. Templates que
+  // realmente iniciam um pedido novo continuam começando pela entrada.
   if (execution.reengagement_template) {
+    const paymentNodeId = String(execution.payment_node_id || '').trim();
+    const resumesPaidCheckpoint = paymentNodeId && (Array.isArray(flow.nodes) ? flow.nodes : []).some((node) => node?.id === paymentNodeId);
     // A tentativa anterior pode ter salvo as faixas como "enviadas" mesmo se
     // uma delas falhou ou se a conversa foi interrompida. Como este é um novo
     // ciclo iniciado pelo template, zere apenas o progresso de entrega para
     // que o card "Entregar música" envie novamente as duas faixas na ordem do
     // fluxo. Mantemos os URLs e os recibos históricos para auditoria.
     const previousDelivery = context.delivery || {};
-    const restartedDelivery = {
+    const restartedDelivery = resumesPaidCheckpoint ? previousDelivery : {
       ...previousDelivery,
       sent_indexes: [],
       intro_sent: false,
@@ -117,7 +121,7 @@ async function resumeMessage(db, connection, message, contact) {
       status: 'in_progress', order_context: { ...context, delivery: restartedDelivery, flow_execution: null, reengagement: { ...(context.reengagement || {}), replied_at: new Date().toISOString(), flow_restarted_at: new Date().toISOString() } }, updated_at: new Date().toISOString(),
     }).eq('id', existing.id).eq('owner_id', existing.owner_id).eq('connection_id', connection.id).in('status', resumableStatus).select().maybeSingle();
     if (!claimed) return { ignored: true, reason: 'template_response_already_claimed' };
-    return executeFlow({ db, flow, lead: claimed, connection });
+    return executeFlow({ db, flow, lead: claimed, connection, resumeAfterId: resumesPaidCheckpoint ? paymentNodeId : null });
   }
 
   // Fora da etapa de template, fluxos com menus continuam aceitando apenas
