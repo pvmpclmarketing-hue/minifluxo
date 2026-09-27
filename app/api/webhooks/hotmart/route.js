@@ -10,11 +10,11 @@ function secretMatches(received) {
   return Boolean(expected) && expected.length === actual.length && timingSafeEqual(Buffer.from(expected), Buffer.from(actual));
 }
 
-function normaliseMexicoPhone(value) {
+function normaliseSpainPhone(value) {
   const digits = String(value || '').replace(/\D/g, '');
   if (!digits) return '';
-  if (digits.startsWith('52') && digits.length >= 12) return digits;
-  return digits.length === 10 ? `52${digits}` : digits;
+  if (digits.startsWith('34') && digits.length >= 11) return digits;
+  return digits.length === 9 ? `34${digits}` : digits;
 }
 
 function purchaseFrom(payload) {
@@ -32,7 +32,7 @@ function purchaseFrom(payload) {
     transaction,
     sck,
     name: String(buyer.name || payload?.name || '').trim(),
-    phone: normaliseMexicoPhone(buyer.checkout_phone || payload?.phone_checkout_number || payload?.phone_number),
+    phone: normaliseSpainPhone(buyer.checkout_phone || payload?.phone_checkout_number || payload?.phone_number),
     amount: purchase?.full_price?.value ?? purchase?.price?.value ?? payload?.full_price ?? payload?.price ?? null,
     currency: purchase?.full_price?.currency_value || purchase?.price?.currency_value || payload?.currency || 'MXN',
   };

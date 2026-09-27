@@ -1,4 +1,4 @@
-# Hotmart México: pagamento aprovado → disparo da música
+# Hotmart Espanha: pagamento aprovado → disparo da música
 
 O MiniFluxo usa o Webhook de Eventos de Pedido **v2.0.0** da Hotmart. Ele aceita apenas `PURCHASE_APPROVED` com `purchase.status = APPROVED` e valida o header `X-HOTMART-HOTTOK`.
 
@@ -9,7 +9,7 @@ O MiniFluxo usa o Webhook de Eventos de Pedido **v2.0.0** da Hotmart. Ele aceita
 | Registrar letra antes de abrir checkout | `POST https://minifluxo.vercel.app/api/webhooks/hotmart/checkout` |
 | Receber pagamento Hotmart | `POST https://minifluxo.vercel.app/api/webhooks/hotmart` |
 
-## 1. Site México: registrar a letra
+## 1. Site Espanha: registrar a letra
 
 Antes de redirecionar ao checkout, o backend do site deve enviar `x-site-secret` e os dados do quiz ao endpoint `hotmart/checkout`. A resposta devolve um `sck` único.
 
@@ -28,7 +28,7 @@ Use o valor retornado no checkout Hotmart em `prefilledInfo.sck`. A Hotmart devo
 
 ## 2. Hotmart
 
-Em **Ferramentas → Webhook**, crie uma configuração para o produto mexicano:
+Em **Ferramentas → Webhook**, crie uma configuração para o produto espanhol:
 
 - Versão: **2.0.0**
 - URL: `https://minifluxo.vercel.app/api/webhooks/hotmart`
@@ -44,4 +44,4 @@ Também mantenha `PAYMENT_WEBHOOK_SECRET` configurado. Ele é usado internamente
 3. Inicia o template aprovado do WhatsApp.
 4. Após qualquer resposta do cliente, o fluxo normal gera e entrega música e vídeo.
 
-Números mexicanos com 10 dígitos são convertidos para o formato WhatsApp `52` + número. A Hotmart normalmente já envia o DDI em `buyer.checkout_phone` para compras fora do Brasil.
+Números espanhóis com 9 dígitos são convertidos para o formato WhatsApp `34` + número. A Hotmart normalmente já envia o DDI em `buyer.checkout_phone` para compras fora do Brasil.

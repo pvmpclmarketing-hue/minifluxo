@@ -5,12 +5,12 @@ import { resolveOfficialSiteConnection } from '../../../site-connection';
 
 export const runtime = 'nodejs';
 
-function normaliseMexicoPhone(value) {
+function normaliseSpainPhone(value) {
   const digits = String(value || '').replace(/\D/g, '');
   if (!digits) return '';
-  if (digits.startsWith('52') && digits.length >= 12) return digits;
-  // O checkout mexicano normalmente informa os 10 dígitos nacionais.
-  return digits.length === 10 ? `52${digits}` : digits;
+  if (digits.startsWith('34') && digits.length >= 11) return digits;
+  // O checkout espanhol normalmente informa os 9 dígitos nacionais.
+  return digits.length === 9 ? `34${digits}` : digits;
 }
 
 // Registra os dados criativos antes de o cliente abrir o checkout Hotmart.
@@ -19,7 +19,7 @@ export async function POST(request) {
   try {
     if (!process.env.SITE_WEBHOOK_SECRET || request.headers.get('x-site-secret') !== process.env.SITE_WEBHOOK_SECRET) return new NextResponse(null, { status: 401 });
     const body = await request.json();
-    const phone = normaliseMexicoPhone(body.phone);
+    const phone = normaliseSpainPhone(body.phone);
     const lyricText = String(body.lyric_text || body.lyricText || '').trim();
     if (!String(body.name || '').trim() || !phone || !lyricText) return NextResponse.json({ error: 'name, phone e lyric_text sao obrigatorios.' }, { status: 400 });
 
@@ -37,7 +37,7 @@ export async function POST(request) {
       lyricText,
       paid: false,
       fulfillment_mode: 'generate_music_in_miniflux',
-      hotmart: { sck, checkout_registered_at: new Date().toISOString(), country: 'MX' },
+      hotmart: { sck, checkout_registered_at: new Date().toISOString(), country: 'ES' },
     };
     const { data: lead, error } = await db.from('leads').insert({
       owner_id: config.owner_id,
