@@ -23,6 +23,14 @@ export async function POST(request) {
       .map((id) => String(id || '').trim())
       .filter((id) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)),
   )].slice(0, 25);
+  // Disparo manual do modelo aprovado de remarketing. Aceita apenas IDs de
+  // leads que ainda aguardam Pix; portanto não reabre compras, músicas ou
+  // entregas já iniciadas.
+  const requestedRemarketingTemplateLeadIds = [...new Set(
+    (Array.isArray(body?.send_remarketing_template_for_lead_ids) ? body.send_remarketing_template_for_lead_ids : [])
+      .map((id) => String(id || '').trim())
+      .filter((id) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)),
+  )].slice(0, 25);
   const db = adminClient();
   const now = Date.now();
   const timeoutHours = Math.max(1, Number(process.env.FLOW_EXECUTION_TIMEOUT_HOURS || 24));
@@ -37,6 +45,8 @@ export async function POST(request) {
   let reengagementTemplatesSent = 0;
   let manualPaymentTemplatesResent = 0;
   const manualTemplateResendErrors = [];
+  let manualRemarketingTemplatesSent = 0;
+  const manualRemarketingTemplateErrors = [];
   for (const leadId of requestedTemplateResends) {
     try {
       const { data: item } = await db.from('leads').select('*').eq('id', leadId).in('status', ['waiting_response', 'timed_out']).maybeSingle();
@@ -82,6 +92,46 @@ export async function POST(request) {
     } catch (templateResendError) {
       console.error('[manual payment template resend] failed', { leadId, error: templateResendError.message });
       manualTemplateResendErrors.push({ lead_id: leadId, reason: 'provider_error' });
+    }
+  }
+  for (const leadId of requestedRemarketingTemplateLeadIds) {
+    try {
+      const { data: item } = await db.from('leads').select('*').eq('id', leadId).eq('status', 'waiting_pix').maybeSingle();
+      if (!item || item.order_context?.paid || !String(item.phone || '').trim()) {
+        manualRemarketingTemplateErrors.push({ lead_id: leadId, reason: 'lead_not_eligible' });
+        continue;
+      }
+      const [{ data: connection }, { data: flow }] = await Promise.all([
+        db.from('connections').select('*').eq('id', item.connection_id).eq('owner_id', item.owner_id).eq('provider', 'meta').eq('status', 'connected').maybeSingle(),
+        db.from('flows').select('*').eq('owner_id', item.owner_id).eq('name', 'Remarketing').eq('status', 'active').maybeSingle(),
+      ]);
+      if (!connection || !flow) {
+        manualRemarketingTemplateErrors.push({ lead_id: leadId, reason: !connection ? 'official_connection_unavailable' : 'remarketing_flow_unavailable' });
+        continue;
+      }
+      const template = remarketingTemplate();
+      const result = await sendTemplate(connection, item.phone, template.name, template.language);
+      const messageId = String(result?.messages?.[0]?.id || result?.data?.messages?.[0]?.id || `remarketing-template-${Date.now()}`);
+      const withHistory = await appendChatMessage(db, item, {
+        id: messageId,
+        direction: 'out',
+        type: 'text',
+        text: 'Vimos que ainda não fez sua música especial!\nTemos uma super oferta de 9,90 para você agora!\n\nPodemos seguir?',
+      });
+      const { error: updateError } = await db.from('leads').update({
+        status: 'waiting_response',
+        order_context: {
+          ...(withHistory.order_context || {}),
+          remarketing: { ...(withHistory.order_context?.remarketing || {}), flow_id: flow.id, template_sent_at: new Date().toISOString(), template_message_id: messageId, manual_dispatch_at: new Date().toISOString() },
+          flow_execution: { flow_id: flow.id, reengagement_template: true, remarketing_template: true, template_message_id: messageId, remarketing_template_sent_at: new Date().toISOString() },
+        },
+        updated_at: new Date().toISOString(),
+      }).eq('id', item.id).eq('owner_id', item.owner_id).eq('status', 'waiting_pix');
+      if (updateError) throw updateError;
+      manualRemarketingTemplatesSent += 1;
+    } catch (remarketingTemplateError) {
+      console.error('[manual remarketing template] failed', { leadId, error: remarketingTemplateError.message });
+      manualRemarketingTemplateErrors.push({ lead_id: leadId, reason: 'provider_error' });
     }
   }
   // A Meta pode aceitar o envio da mídia e, em seguida, recusá-lo por ela
@@ -456,7 +506,7 @@ export async function POST(request) {
       console.error('[kie delivery recovery] failed', { leadId: item.id, error: deliveryError.message });
     }
   }
-  return NextResponse.json({ received: true, resumed, remarketing_dispatched: remarketingDispatched, recovery_templates_sent: recoveryTemplatesSent, reengagement_templates_sent: reengagementTemplatesSent, backup_fallback_started: backupFallbackStarted, backup_fallback_errors: backupFallbackErrors, manual_payment_templates_resent: manualPaymentTemplatesResent, manual_payment_template_resend_errors: manualTemplateResendErrors, unstarted_payment_recovered: recoveredUnstarted, kie_recovered: recoveredKie, lyric_video_recovered: recoveredLyricVideos, delivery_recovered: recoveredDelivery, timed_out: stopped, timeout_hours: timeoutHours });
+  return NextResponse.json({ received: true, resumed, remarketing_dispatched: remarketingDispatched, recovery_templates_sent: recoveryTemplatesSent, reengagement_templates_sent: reengagementTemplatesSent, backup_fallback_started: backupFallbackStarted, backup_fallback_errors: backupFallbackErrors, manual_payment_templates_resent: manualPaymentTemplatesResent, manual_payment_template_resend_errors: manualTemplateResendErrors, manual_remarketing_templates_sent: manualRemarketingTemplatesSent, manual_remarketing_template_errors: manualRemarketingTemplateErrors, unstarted_payment_recovered: recoveredUnstarted, kie_recovered: recoveredKie, lyric_video_recovered: recoveredLyricVideos, delivery_recovered: recoveredDelivery, timed_out: stopped, timeout_hours: timeoutHours });
 }
 
 // A Vercel chama Cron Jobs por GET. Mantemos POST para o gatilho seguro já
