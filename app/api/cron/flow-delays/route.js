@@ -152,7 +152,7 @@ export async function POST(request) {
     const execution = context.flow_execution || {};
     const reengagement = context.reengagement || {};
     const fallback = context.backup_fallback || {};
-    const templateSentAt = Date.parse(reengagement.payment_template_resent_at || reengagement.initial_template_sent_at || '');
+    const templateSentAt = Date.parse(reengagement.payment_template_resent_at || reengagement.initial_template_sent_at || reengagement.template_sent_at || '');
     if (!context.paid || !execution.reengagement_template || item.kie_task_id || item.music_url || fallback.dispatched_at || !Number.isFinite(templateSentAt)) continue;
     if (fallback.next_retry_at && Date.parse(fallback.next_retry_at) > now) continue;
     let claimedBackupConnectionId = null;
