@@ -68,7 +68,19 @@ export async function createUazInstance(name){
 }
 export async function configureGlobalUazWebhook(){const base=String(process.env.WHATSENTREGAVEL_URL||'https://minifluxo.vercel.app').replace(/\/$/,'');await adminCall('/globalwebhook',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:true,url:`${base}/api/webhooks/uazapi`,events:['messages','messages_update','connection'],excludeMessages:['isGroupYes'],addUrlEvents:false,addUrlTypesMessages:false})});}
 export async function tokenForConnection(db,connection){
-  if(connection.uazapi_token_cipher)return decryptSecret(connection.uazapi_token_cipher);
+  if(connection.uazapi_token_cipher){
+    try{
+      const storedToken=decryptSecret(connection.uazapi_token_cipher);
+      // Duas versões antigas gravaram o token global da UazAPI dentro da
+      // conexão. Ele autentica chamadas administrativas, mas é recusado em
+      // /instance/connect. Identificamos pelo valor (sem expô-lo) e geramos a
+      // instância correta abaixo.
+      const globalTokens=[process.env.UAZAPI_TOKEN,process.env.UAZAPI_ADMIN_TOKEN].filter(Boolean);
+      if(!globalTokens.includes(storedToken))return storedToken;
+    }catch(error){
+      console.warn('[uazapi] stored instance token could not be read; recreating instance token', {connection_id:connection.id});
+    }
+  }
   // Conexões criadas pela versão que usava o token administrativo diretamente
   // não possuem token de instância. Criamos uma instância própria agora; nunca
   // reutilizamos UAZAPI_ADMIN_TOKEN/UAZAPI_TOKEN como se fossem token do QR.
