@@ -37,9 +37,46 @@ async function adminCall(path,options){
   }
   throw lastError;
 }
-export async function createUazInstance(name){const data=await adminCall('/instance/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});if(!data.token)throw new Error('A UazAPI criou a instância, mas não retornou o token dela.');return {token:data.token,instanceName:data.instance?.name||data.name||name};}
+function instanceToken(data){return data?.token||data?.instance?.token||data?.data?.token||data?.data?.instance?.token||null;}
+function instanceName(data,fallback){return data?.instance?.name||data?.name||data?.data?.instance?.name||data?.data?.name||fallback;}
+function listedInstances(data){
+  if(Array.isArray(data))return data;
+  for(const candidate of [data?.instances,data?.data?.instances,data?.data])if(Array.isArray(candidate))return candidate;
+  return [];
+}
+export async function findUazInstance(name){
+  const target=String(name||'').trim().toLowerCase();
+  const data=await adminCall('/instance/all',{method:'GET'});
+  return listedInstances(data).find(item=>String(item?.name||item?.instance?.name||'').trim().toLowerCase()===target)||null;
+}
+export async function createUazInstance(name){
+  const payload={name:String(name||'').trim(),systemName:'minifluxo'};
+  let data;
+  try{
+    // /instance/init é o endpoint oficial de criação. Ele devolve o token
+    // individual que é obrigatório para gerar QR, status e mensagens.
+    data=await adminCall('/instance/init',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+  }catch(error){
+    // Algumas instalações antigas expõem /instance/create. Mantemos esse
+    // fallback apenas para compatibilidade de servidor, não como rota padrão.
+    if(!/^UazAPI: 404\b/.test(String(error?.message||'')))throw error;
+    data=await adminCall('/instance/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+  }
+  const token=instanceToken(data);
+  if(!token)throw new Error('A UazAPI criou a instância, mas não retornou o token individual necessário para gerar o QR Code.');
+  return {token,instanceName:instanceName(data,payload.name)};
+}
 export async function configureGlobalUazWebhook(){const base=String(process.env.WHATSENTREGAVEL_URL||'https://minifluxo.vercel.app').replace(/\/$/,'');await adminCall('/globalwebhook',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:true,url:`${base}/api/webhooks/uazapi`,events:['messages','messages_update','connection'],excludeMessages:['isGroupYes'],addUrlEvents:false,addUrlTypesMessages:false})});}
-export async function tokenForConnection(db,connection){let token;if(connection.uazapi_token_cipher)token=decryptSecret(connection.uazapi_token_cipher);else if(process.env.UAZAPI_TOKEN){token=process.env.UAZAPI_TOKEN;await db.from('connections').update({uazapi_token_cipher:encryptSecret(token),uazapi_token_hash:hashSecret(token),status:'disconnected'}).eq('id',connection.id);}else {const created=await createUazInstance(connection.instance_name||connection.name);token=created.token;await db.from('connections').update({instance_name:created.instanceName,uazapi_token_cipher:encryptSecret(token),uazapi_token_hash:hashSecret(token),status:'disconnected'}).eq('id',connection.id);}if(!connection.uazapi_token_hash)await db.from('connections').update({uazapi_token_hash:hashSecret(token)}).eq('id',connection.id);return token;}
+export async function tokenForConnection(db,connection){
+  if(connection.uazapi_token_cipher)return decryptSecret(connection.uazapi_token_cipher);
+  // Conexões criadas pela versão que usava o token administrativo diretamente
+  // não possuem token de instância. Criamos uma instância própria agora; nunca
+  // reutilizamos UAZAPI_ADMIN_TOKEN/UAZAPI_TOKEN como se fossem token do QR.
+  const created=await createUazInstance(connection.instance_name||connection.name);
+  const {error}=await db.from('connections').update({instance_name:created.instanceName,uazapi_token_cipher:encryptSecret(created.token),uazapi_token_hash:hashSecret(created.token),status:'disconnected'}).eq('id',connection.id);
+  if(error)throw error;
+  return created.token;
+}
 export async function uazCall(token,path,body){return call(path,{method:'POST',headers:{token,'Content-Type':'application/json'},body:JSON.stringify(body)});}
 export async function disconnectUazInstance(db,connection){return uazCall(await tokenForConnection(db,connection),'/instance/disconnect',{});}
 export async function uazGet(token,path){return call(path,{headers:{token}});}
