@@ -24,8 +24,21 @@ async function call(path,options){
   }
   throw lastError;
 }
-export async function createUazInstance(name){const adminToken=process.env.UAZAPI_ADMIN_TOKEN;if(!adminToken)throw new Error('Configure UAZAPI_ADMIN_TOKEN na Vercel para criar conexões UazAPI.');const data=await call('/instance/create',{method:'POST',headers:{admintoken:adminToken,'Content-Type':'application/json'},body:JSON.stringify({name})});if(!data.token)throw new Error('A UazAPI criou a instância, mas não retornou o token dela.');return {token:data.token,instanceName:data.instance?.name||data.name||name};}
-export async function configureGlobalUazWebhook(){const base=String(process.env.WHATSENTREGAVEL_URL||'https://minifluxo.vercel.app').replace(/\/$/,'');const adminToken=process.env.UAZAPI_ADMIN_TOKEN;if(!adminToken)throw new Error('Configure UAZAPI_ADMIN_TOKEN na Vercel para registrar o webhook global da UazAPI.');await call('/globalwebhook',{method:'POST',headers:{admintoken:adminToken,'Content-Type':'application/json'},body:JSON.stringify({enabled:true,url:`${base}/api/webhooks/uazapi`,events:['messages','messages_update','connection'],excludeMessages:['isGroupYes'],addUrlEvents:false,addUrlTypesMessages:false})});}
+const isUnauthorized=error=>/^UazAPI: 401\b/.test(String(error?.message||''));
+async function adminCall(path,options){
+  // UAZAPI_TOKEN era o nome usado pelas instalações anteriores. Mantemos a
+  // compatibilidade sem deixar um ADMIN_TOKEN vencido derrubar o canal reserva.
+  const tokens=[process.env.UAZAPI_ADMIN_TOKEN,process.env.UAZAPI_TOKEN].filter(Boolean).filter((token,index,list)=>list.indexOf(token)===index);
+  if(!tokens.length)throw new Error('Configure UAZAPI_ADMIN_TOKEN na Vercel para criar conexões UazAPI.');
+  let lastError;
+  for(const adminToken of tokens){
+    try{return await call(path,{...options,headers:{...(options.headers||{}),admintoken:adminToken}});}
+    catch(error){lastError=error;if(!isUnauthorized(error))throw error;}
+  }
+  throw lastError;
+}
+export async function createUazInstance(name){const data=await adminCall('/instance/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});if(!data.token)throw new Error('A UazAPI criou a instância, mas não retornou o token dela.');return {token:data.token,instanceName:data.instance?.name||data.name||name};}
+export async function configureGlobalUazWebhook(){const base=String(process.env.WHATSENTREGAVEL_URL||'https://minifluxo.vercel.app').replace(/\/$/,'');await adminCall('/globalwebhook',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:true,url:`${base}/api/webhooks/uazapi`,events:['messages','messages_update','connection'],excludeMessages:['isGroupYes'],addUrlEvents:false,addUrlTypesMessages:false})});}
 export async function tokenForConnection(db,connection){let token;if(connection.uazapi_token_cipher)token=decryptSecret(connection.uazapi_token_cipher);else {const created=await createUazInstance(connection.instance_name||connection.name);token=created.token;await db.from('connections').update({instance_name:created.instanceName,uazapi_token_cipher:encryptSecret(token),uazapi_token_hash:hashSecret(token),status:'disconnected'}).eq('id',connection.id);}if(!connection.uazapi_token_hash)await db.from('connections').update({uazapi_token_hash:hashSecret(token)}).eq('id',connection.id);return token;}
 export async function uazCall(token,path,body){return call(path,{method:'POST',headers:{token,'Content-Type':'application/json'},body:JSON.stringify(body)});}
 export async function disconnectUazInstance(db,connection){return uazCall(await tokenForConnection(db,connection),'/instance/disconnect',{});}
