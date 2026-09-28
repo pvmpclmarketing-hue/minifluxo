@@ -1,7 +1,11 @@
 import { NextResponse } from 'next/server';
 import { adminClient, requireUser } from '../supabase';
 
-const allowedHosts = new Set(['musica.memberproduto.shop', 'felicidadeemmusica.vercel.app']);
+const allowedHosts = new Set([
+  'musica.memberproduto.shop',
+  'felicidadeemmusica.shop',
+  'felicidadeemmusica.vercel.app',
+]);
 
 function allowedOrigin(request) {
   const origin = request.headers.get('origin');
