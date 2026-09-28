@@ -66,6 +66,9 @@ alter table public.flows add column if not exists share_code text;
 update public.flows set share_code = 'FLW-' || upper(replace(gen_random_uuid()::text, '-', '')) where share_code is null;
 create unique index if not exists flows_share_code_unique_idx on public.flows(share_code);
 alter table public.connection_flow_configs add column if not exists conversation_flow_id uuid references public.flows(id) on delete set null;
+alter table public.connection_flow_configs add column if not exists backup_connection_id uuid references public.connections(id) on delete set null;
+alter table public.connection_flow_configs add column if not exists backup_flow_id uuid references public.flows(id) on delete set null;
+alter table public.connection_flow_configs add column if not exists backup_response_timeout_minutes integer not null default 50 check (backup_response_timeout_minutes between 5 and 1440);
 -- Dois gatilhos de pagamento independentes: prévia pronta ou geração no WhatsEntregavel.
 alter table public.connection_flow_configs add column if not exists payment_preview_flow_id uuid references public.flows(id) on delete set null;
 alter table public.connection_flow_configs add column if not exists payment_generation_flow_id uuid references public.flows(id) on delete set null;

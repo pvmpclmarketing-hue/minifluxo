@@ -142,6 +142,80 @@ export async function POST(request) {
       reengagementTemplatesSent += 1;
     } catch (templateError) { console.error('[reengagement template] failed', { leadId: item.id, error: templateError.message }); }
   }
+  // Se a pessoa não respondeu nenhum template do número oficial, o canal
+  // reserva UazAPI assume depois do prazo configurado. O claim condicional e
+  // o checkpoint no contexto impedem duplicar música ou disparar a cada cron.
+  let backupFallbackStarted = 0;
+  const backupFallbackErrors = [];
+  for (const item of responseWaiters || []) {
+    const context = item.order_context || {};
+    const execution = context.flow_execution || {};
+    const reengagement = context.reengagement || {};
+    const fallback = context.backup_fallback || {};
+    const templateSentAt = Date.parse(reengagement.payment_template_resent_at || reengagement.initial_template_sent_at || '');
+    if (!context.paid || !execution.reengagement_template || item.kie_task_id || item.music_url || fallback.dispatched_at || !Number.isFinite(templateSentAt)) continue;
+    if (fallback.next_retry_at && Date.parse(fallback.next_retry_at) > now) continue;
+    let claimedBackupConnectionId = null;
+    try {
+      const { data: config } = await db.from('connection_flow_configs')
+        .select('backup_connection_id,backup_flow_id,backup_response_timeout_minutes')
+        .eq('connection_id', item.connection_id).eq('owner_id', item.owner_id).maybeSingle();
+      const minutes = Math.max(5, Math.min(1440, Number(config?.backup_response_timeout_minutes || 50)));
+      if (!config?.backup_connection_id || now - templateSentAt < minutes * 60 * 1000) continue;
+      const [{ data: backupConnection }, { data: flow }] = await Promise.all([
+        db.from('connections').select('*').eq('id', config.backup_connection_id).eq('owner_id', item.owner_id).eq('provider', 'uazapi').eq('status', 'connected').maybeSingle(),
+        db.from('flows').select('*').eq('id', config.backup_flow_id || execution.flow_id).eq('owner_id', item.owner_id).eq('status', 'active').maybeSingle(),
+      ]);
+      if (!backupConnection || !flow) {
+        backupFallbackErrors.push({ lead_id: item.id, reason: !backupConnection ? 'backup_connection_unavailable' : 'backup_flow_unavailable' });
+        continue;
+      }
+      const attempt = Number(fallback.attempts || 0) + 1;
+      const { data: claimed, error: claimError } = await db.from('leads').update({
+        status: 'in_progress',
+        connection_id: backupConnection.id,
+        provider: backupConnection.provider,
+        order_context: {
+          ...context,
+          backup_fallback: {
+            ...fallback,
+            attempts: attempt,
+            started_at: new Date().toISOString(),
+            original_connection_id: item.connection_id,
+            connection_id: backupConnection.id,
+            flow_id: flow.id,
+            dispatched_at: new Date().toISOString(),
+          },
+          flow_execution: null,
+        },
+        updated_at: new Date().toISOString(),
+      }).eq('id', item.id).eq('owner_id', item.owner_id).eq('connection_id', item.connection_id).eq('status', 'waiting_response').select().maybeSingle();
+      if (claimError) throw claimError;
+      if (!claimed) continue;
+      claimedBackupConnectionId = backupConnection.id;
+      const sameFlow = flow.id === execution.flow_id;
+      const resumeAfterId = sameFlow && execution.payment_node_id ? execution.payment_node_id : null;
+      await executeFlow({ db, flow, lead: claimed, connection: backupConnection, resumeAfterId });
+      backupFallbackStarted += 1;
+    } catch (backupError) {
+      console.error('[backup uazapi fallback] failed', { leadId: item.id, error: backupError.message });
+      // Sem sucesso não abandonamos o lead: ele continua aguardando no
+      // número oficial e a próxima tentativa ocorre cinco minutos depois.
+      const attempt = Number(fallback.attempts || 0) + 1;
+      if (claimedBackupConnectionId) await db.from('leads').update({
+        status: 'waiting_response',
+        connection_id: item.connection_id,
+        provider: item.provider,
+        order_context: {
+          ...context,
+          backup_fallback: { ...fallback, attempts: attempt, last_error: String(backupError.message || ''), next_retry_at: new Date(now + 5 * 60 * 1000).toISOString() },
+          flow_execution: execution,
+        },
+        updated_at: new Date().toISOString(),
+      }).eq('id', item.id).eq('owner_id', item.owner_id).eq('status', 'in_progress').eq('connection_id', claimedBackupConnectionId);
+      backupFallbackErrors.push({ lead_id: item.id, reason: 'backup_flow_execution_failed' });
+    }
+  }
   // Se o webhook de pagamento falhar entre criar o lead e iniciar a Kie, o
   // pedido fica pago, com letra, porém sem checkpoint nem taskId. Retomamos
   // exclusivamente esse estado inicial; isso não repete fluxos aguardando
@@ -382,7 +456,7 @@ export async function POST(request) {
       console.error('[kie delivery recovery] failed', { leadId: item.id, error: deliveryError.message });
     }
   }
-  return NextResponse.json({ received: true, resumed, remarketing_dispatched: remarketingDispatched, recovery_templates_sent: recoveryTemplatesSent, reengagement_templates_sent: reengagementTemplatesSent, manual_payment_templates_resent: manualPaymentTemplatesResent, manual_payment_template_resend_errors: manualTemplateResendErrors, unstarted_payment_recovered: recoveredUnstarted, kie_recovered: recoveredKie, lyric_video_recovered: recoveredLyricVideos, delivery_recovered: recoveredDelivery, timed_out: stopped, timeout_hours: timeoutHours });
+  return NextResponse.json({ received: true, resumed, remarketing_dispatched: remarketingDispatched, recovery_templates_sent: recoveryTemplatesSent, reengagement_templates_sent: reengagementTemplatesSent, backup_fallback_started: backupFallbackStarted, backup_fallback_errors: backupFallbackErrors, manual_payment_templates_resent: manualPaymentTemplatesResent, manual_payment_template_resend_errors: manualTemplateResendErrors, unstarted_payment_recovered: recoveredUnstarted, kie_recovered: recoveredKie, lyric_video_recovered: recoveredLyricVideos, delivery_recovered: recoveredDelivery, timed_out: stopped, timeout_hours: timeoutHours });
 }
 
 // A Vercel chama Cron Jobs por GET. Mantemos POST para o gatilho seguro já
