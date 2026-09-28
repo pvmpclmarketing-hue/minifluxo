@@ -14,6 +14,15 @@ export async function POST(request) {
     .filter(Boolean)
     .map((secret) => `Bearer ${secret}`);
   if (!acceptedSecrets.length || !acceptedSecrets.includes(receivedAuthorization)) return new NextResponse(null, { status: 401 });
+  // Reenvio administrativo do template de abertura. É usado apenas para uma
+  // lista explícita de leads que já pagaram e continuam aguardando resposta;
+  // assim não repetimos Pix, geração ou entrega de músicas.
+  const body = await request.json().catch(() => ({}));
+  const requestedTemplateResends = [...new Set(
+    (Array.isArray(body?.resend_payment_template_for_lead_ids) ? body.resend_payment_template_for_lead_ids : [])
+      .map((id) => String(id || '').trim())
+      .filter((id) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)),
+  )].slice(0, 25);
   const db = adminClient();
   const now = Date.now();
   const timeoutHours = Math.max(1, Number(process.env.FLOW_EXECUTION_TIMEOUT_HOURS || 24));
@@ -26,6 +35,55 @@ export async function POST(request) {
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   let resumed = 0; let remarketingDispatched = 0; let recoveredKie = 0; let stopped = expired?.length || 0;
   let reengagementTemplatesSent = 0;
+  let manualPaymentTemplatesResent = 0;
+  const manualTemplateResendErrors = [];
+  for (const leadId of requestedTemplateResends) {
+    try {
+      const { data: item } = await db.from('leads').select('*').eq('id', leadId).in('status', ['waiting_response', 'timed_out']).maybeSingle();
+      const context = item?.order_context || {};
+      const execution = context.flow_execution || {};
+      // Só reabre uma compra já aprovada cuja primeira resposta ainda é
+      // necessária. A proteção evita qualquer reenvio para mídia/geração.
+      if (!item || !context.paid || !execution.reengagement_template || item.kie_task_id || item.music_url) {
+        manualTemplateResendErrors.push({ lead_id: leadId, reason: 'lead_not_eligible' });
+        continue;
+      }
+      const { data: connection } = await db.from('connections').select('*').eq('id', item.connection_id).eq('owner_id', item.owner_id).eq('provider', 'meta').eq('status', 'connected').maybeSingle();
+      if (!connection) {
+        manualTemplateResendErrors.push({ lead_id: leadId, reason: 'official_connection_unavailable' });
+        continue;
+      }
+      const template = paymentTemplate();
+      const result = await sendTemplate(connection, item.phone, template.name, template.language);
+      const messageId = String(result?.messages?.[0]?.id || result?.data?.messages?.[0]?.id || `template-retry-${Date.now()}`);
+      const withHistory = await appendChatMessage(db, item, {
+        id: messageId,
+        direction: 'out',
+        type: 'text',
+        text: 'Olá! Tudo bem? 😊\n\nPosso enviar sua música? Me responda que já inicio o processo!',
+      });
+      const reengagement = withHistory.order_context?.reengagement || context.reengagement || {};
+      const { error: updateError } = await db.from('leads').update({
+        status: 'waiting_response',
+        order_context: {
+          ...(withHistory.order_context || {}),
+          reengagement: {
+            ...reengagement,
+            payment_template_resent_at: new Date().toISOString(),
+            payment_template_resent_message_id: messageId,
+            payment_template_resend_count: Number(reengagement.payment_template_resend_count || 0) + 1,
+          },
+          flow_execution: { ...execution, reengagement_template: true, template_message_id: messageId },
+        },
+        updated_at: new Date().toISOString(),
+      }).eq('id', item.id).eq('owner_id', item.owner_id).in('status', ['waiting_response', 'timed_out']);
+      if (updateError) throw updateError;
+      manualPaymentTemplatesResent += 1;
+    } catch (templateResendError) {
+      console.error('[manual payment template resend] failed', { leadId, error: templateResendError.message });
+      manualTemplateResendErrors.push({ lead_id: leadId, reason: 'provider_error' });
+    }
+  }
   // A Meta pode aceitar o envio da mídia e, em seguida, recusá-lo por ela
   // estar fora da janela de 24 horas. Reabre automaticamente só esses casos
   // com o template aprovado, sem tocar em entregas já aceitas.
@@ -324,7 +382,7 @@ export async function POST(request) {
       console.error('[kie delivery recovery] failed', { leadId: item.id, error: deliveryError.message });
     }
   }
-  return NextResponse.json({ received: true, resumed, remarketing_dispatched: remarketingDispatched, recovery_templates_sent: recoveryTemplatesSent, reengagement_templates_sent: reengagementTemplatesSent, unstarted_payment_recovered: recoveredUnstarted, kie_recovered: recoveredKie, lyric_video_recovered: recoveredLyricVideos, delivery_recovered: recoveredDelivery, timed_out: stopped, timeout_hours: timeoutHours });
+  return NextResponse.json({ received: true, resumed, remarketing_dispatched: remarketingDispatched, recovery_templates_sent: recoveryTemplatesSent, reengagement_templates_sent: reengagementTemplatesSent, manual_payment_templates_resent: manualPaymentTemplatesResent, manual_payment_template_resend_errors: manualTemplateResendErrors, unstarted_payment_recovered: recoveredUnstarted, kie_recovered: recoveredKie, lyric_video_recovered: recoveredLyricVideos, delivery_recovered: recoveredDelivery, timed_out: stopped, timeout_hours: timeoutHours });
 }
 
 // A Vercel chama Cron Jobs por GET. Mantemos POST para o gatilho seguro já
