@@ -47,6 +47,8 @@ export async function POST(request) {
   const manualTemplateResendErrors = [];
   let manualRemarketingTemplatesSent = 0;
   const manualRemarketingTemplateErrors = [];
+  let automaticRemarketingTemplatesSent = 0;
+  const automaticRemarketingTemplateErrors = [];
   for (const leadId of requestedTemplateResends) {
     try {
       const { data: item } = await db.from('leads').select('*').eq('id', leadId).in('status', ['waiting_response', 'timed_out']).maybeSingle();
@@ -132,6 +134,68 @@ export async function POST(request) {
     } catch (remarketingTemplateError) {
       console.error('[manual remarketing template] failed', { leadId, error: remarketingTemplateError.message });
       manualRemarketingTemplateErrors.push({ lead_id: leadId, reason: 'provider_error' });
+    }
+  }
+  // Nem todas as versões antigas do site chamavam o endpoint que agenda o
+  // remarketing depois de criar o Pix. Esta recuperação procura o estado
+  // canônico (lead do site + Pix pendente + telefone) e envia exatamente um
+  // template após dez minutos. Assim o remarketing não depende de uma etapa
+  // opcional do front-end, mas também nunca alcança pedidos pagos ou leads sem
+  // WhatsApp válido.
+  const remarketingEligibleAt = new Date(now - 10 * 60 * 1000).toISOString();
+  const { data: automaticRemarketingCandidates, error: automaticRemarketingError } = await db
+    .from('leads')
+    .select('*')
+    .eq('status', 'waiting_pix')
+    .in('source', ['site', 'site_remarketing'])
+    .lte('created_at', remarketingEligibleAt)
+    .limit(100);
+  if (automaticRemarketingError) return NextResponse.json({ error: automaticRemarketingError.message }, { status: 500 });
+  for (const item of automaticRemarketingCandidates || []) {
+    try {
+      const context = item.order_context || {};
+      const alreadySent = Boolean(
+        context.remarketing?.template_sent_at
+        || context.remarketing_template_sent_at
+        || context.flow_execution?.remarketing_template,
+      );
+      const phone = String(item.phone || '').replace(/\D/g, '');
+      if (context.paid || alreadySent || !/^55\d{10,11}$/.test(phone)) continue;
+      const [{ data: connection }, { data: config }] = await Promise.all([
+        db.from('connections').select('*').eq('id', item.connection_id).eq('owner_id', item.owner_id).eq('provider', 'meta').eq('status', 'connected').maybeSingle(),
+        db.from('connection_flow_configs').select('owner_id,remarketing_flow_id').eq('connection_id', item.connection_id).maybeSingle(),
+      ]);
+      if (!connection || !config?.remarketing_flow_id || config.owner_id !== item.owner_id) {
+        automaticRemarketingTemplateErrors.push({ lead_id: item.id, reason: 'remarketing_channel_or_flow_unavailable' });
+        continue;
+      }
+      const { data: flow } = await db.from('flows').select('*').eq('id', config.remarketing_flow_id).eq('owner_id', item.owner_id).eq('status', 'active').maybeSingle();
+      if (!flow) {
+        automaticRemarketingTemplateErrors.push({ lead_id: item.id, reason: 'remarketing_flow_unavailable' });
+        continue;
+      }
+      const template = remarketingTemplate();
+      const result = await sendTemplate(connection, phone, template.name, template.language);
+      const messageId = String(result?.messages?.[0]?.id || result?.data?.messages?.[0]?.id || `remarketing-template-${Date.now()}`);
+      const withHistory = await appendChatMessage(db, item, {
+        id: messageId,
+        direction: 'out',
+        type: 'text',
+        text: 'Vimos que ainda não fez sua música especial!\nTemos uma super oferta de 9,90 para você agora!\n\nPodemos seguir?',
+      });
+      const { data: claimed } = await db.from('leads').update({
+        status: 'waiting_response',
+        order_context: {
+          ...(withHistory.order_context || {}),
+          remarketing: { ...(withHistory.order_context?.remarketing || {}), origin: 'site_unpaid_pix', flow_id: flow.id, template_sent_at: new Date().toISOString(), template_message_id: messageId, automatic_dispatch_at: new Date().toISOString() },
+          flow_execution: { flow_id: flow.id, reengagement_template: true, remarketing_template: true, template_message_id: messageId, remarketing_template_sent_at: new Date().toISOString() },
+        },
+        updated_at: new Date().toISOString(),
+      }).eq('id', item.id).eq('owner_id', item.owner_id).eq('status', 'waiting_pix').select('id').maybeSingle();
+      if (claimed) automaticRemarketingTemplatesSent += 1;
+    } catch (automaticRemarketingTemplateError) {
+      console.error('[automatic remarketing template] failed', { leadId: item.id, error: automaticRemarketingTemplateError.message });
+      automaticRemarketingTemplateErrors.push({ lead_id: item.id, reason: 'provider_error' });
     }
   }
   // A Meta pode aceitar o envio da mídia e, em seguida, recusá-lo por ela
@@ -506,7 +570,7 @@ export async function POST(request) {
       console.error('[kie delivery recovery] failed', { leadId: item.id, error: deliveryError.message });
     }
   }
-  return NextResponse.json({ received: true, resumed, remarketing_dispatched: remarketingDispatched, recovery_templates_sent: recoveryTemplatesSent, reengagement_templates_sent: reengagementTemplatesSent, backup_fallback_started: backupFallbackStarted, backup_fallback_errors: backupFallbackErrors, manual_payment_templates_resent: manualPaymentTemplatesResent, manual_payment_template_resend_errors: manualTemplateResendErrors, manual_remarketing_templates_sent: manualRemarketingTemplatesSent, manual_remarketing_template_errors: manualRemarketingTemplateErrors, unstarted_payment_recovered: recoveredUnstarted, kie_recovered: recoveredKie, lyric_video_recovered: recoveredLyricVideos, delivery_recovered: recoveredDelivery, timed_out: stopped, timeout_hours: timeoutHours });
+  return NextResponse.json({ received: true, resumed, remarketing_dispatched: remarketingDispatched, recovery_templates_sent: recoveryTemplatesSent, reengagement_templates_sent: reengagementTemplatesSent, backup_fallback_started: backupFallbackStarted, backup_fallback_errors: backupFallbackErrors, manual_payment_templates_resent: manualPaymentTemplatesResent, manual_payment_template_resend_errors: manualTemplateResendErrors, manual_remarketing_templates_sent: manualRemarketingTemplatesSent, manual_remarketing_template_errors: manualRemarketingTemplateErrors, automatic_remarketing_templates_sent: automaticRemarketingTemplatesSent, automatic_remarketing_template_errors: automaticRemarketingTemplateErrors, unstarted_payment_recovered: recoveredUnstarted, kie_recovered: recoveredKie, lyric_video_recovered: recoveredLyricVideos, delivery_recovered: recoveredDelivery, timed_out: stopped, timeout_hours: timeoutHours });
 }
 
 // A Vercel chama Cron Jobs por GET. Mantemos POST para o gatilho seguro já
