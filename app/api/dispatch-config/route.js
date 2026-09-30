@@ -6,8 +6,8 @@ export async function POST(request) {
     const user=await requireUser(); const body=await request.json(); const db=adminClient();
     const {data:connection,error:connectionError}=await db.from('connections').select('id,provider').eq('id',body.connection_id).eq('owner_id',user.id).single();
     if(connectionError || !connection)return NextResponse.json({error:'Conexao nao encontrada.'},{status:404});
-    if(connection.provider!=='meta')return NextResponse.json({error:'A configuração principal precisa pertencer ao canal oficial da Meta.'},{status:400});
-    const backupConnectionId=body.backup_connection_id||null;
+    if(!['meta','uazapi'].includes(connection.provider))return NextResponse.json({error:'Escolha uma conexão Meta ou UazAPI.'},{status:400});
+    const backupConnectionId=connection.provider==='meta'?(body.backup_connection_id||null):null;
     if(backupConnectionId){
       const {data:backup}=await db.from('connections').select('id,provider,status').eq('id',backupConnectionId).eq('owner_id',user.id).maybeSingle();
       if(!backup || backup.provider!=='uazapi')return NextResponse.json({error:'Escolha uma conexão UazAPI válida como número reserva.'},{status:400});

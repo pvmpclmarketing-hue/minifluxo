@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { adminClient } from '../../supabase';
 import { sendTemplate, sendText } from '../../provider';
 import { executeFlow } from '../../flow-engine';
-import { resolveOfficialSiteConnection } from '../../site-connection';
+import { resolveSiteDispatchConnection, resolveSiteFlowConfig } from '../../site-connection';
 import { appendChatMessage } from '../../chat-history';
 import { paymentTemplate } from '../../whatsapp-templates';
 
@@ -60,16 +60,17 @@ export async function POST(request) {
 
     stage = 'connection_resolution';
     const db = adminClient();
-    const connection = await resolveOfficialSiteConnection(db, { integrationKey: body.integration_key, connectionId: body.connection_id });
+    const connection = await resolveSiteDispatchConnection(db, { integrationKey: body.integration_key, connectionId: body.connection_id });
     if (!connection) {
       console.warn('[payment webhook] rejected invalid integration', { order_id: orderId, has_integration_key: Boolean(body.integration_key), has_connection_id: Boolean(body.connection_id) });
       return NextResponse.json({ error: 'Informe uma integration_key valida.' }, { status: 400 });
     }
     stage = 'flow_configuration';
-    const { data: config, error: configError } = await db.from('connection_flow_configs').select('payment_preview_flow_id,payment_generation_flow_id,owner_id').eq('connection_id', connection.id).single();
-    if (config?.owner_id !== connection.owner_id) return NextResponse.json({ error: 'A configuração não pertence à conta desta conexão.' }, { status: 403 });
-    const flowId = mode === 'deliver_existing_preview_audio' ? config?.payment_preview_flow_id : config?.payment_generation_flow_id;
-    if (configError || !flowId) return NextResponse.json({ error: mode === 'deliver_existing_preview_audio' ? 'Nenhum fluxo de pagamento com prévia pronta está configurado para esta conexão.' : 'Nenhum fluxo de pagamento sem prévia está configurado para esta conexão.' }, { status: 404 });
+    const flowField = mode === 'deliver_existing_preview_audio' ? 'payment_preview_flow_id' : 'payment_generation_flow_id';
+    const config = await resolveSiteFlowConfig(db, { ownerId: connection.owner_id, connectionId: connection.id, flowField });
+    if (config && config.owner_id !== connection.owner_id) return NextResponse.json({ error: 'A configuração não pertence à conta desta conexão.' }, { status: 403 });
+    const flowId = config?.[flowField];
+    if (!flowId) return NextResponse.json({ error: mode === 'deliver_existing_preview_audio' ? 'Nenhum fluxo de pagamento com prévia pronta está configurado para esta conexão.' : 'Nenhum fluxo de pagamento sem prévia está configurado para esta conexão.' }, { status: 404 });
     const { data: flow, error: flowError } = await db.from('flows').select('id,owner_id').eq('id', flowId).eq('owner_id', config.owner_id).single();
     if (flowError || !flow) return NextResponse.json({ error: 'Fluxo configurado nao encontrado.' }, { status: 404 });
 
@@ -96,7 +97,7 @@ export async function POST(request) {
     };
     // A geração só passa a ser "generating" depois que a Kie devolve um taskId.
     // Antes disso o pedido pode ser reenviado com segurança caso uma etapa falhe.
-    const leadValues = { name: body.customer.name, phone, music_request: musicRequest, status: 'in_progress', connection_id: connection.id, order_context: orderContext, updated_at: new Date().toISOString() };
+    const leadValues = { name: body.customer.name, phone, music_request: musicRequest, status: 'in_progress', connection_id: connection.id, provider: connection.provider, order_context: orderContext, updated_at: new Date().toISOString() };
     let lead;
     let resumeAfterId = null;
     let promotedFromRemarketing = false;
@@ -140,7 +141,7 @@ export async function POST(request) {
     }
     stage = 'create_lead';
     if (!lead) {
-      const { data, error } = await db.from('leads').insert({ owner_id: flow.owner_id, source: 'payment', provider: 'payment', external_order_id: orderContext.sourceOrderId, ...leadValues }).select().single();
+      const { data, error } = await db.from('leads').insert({ owner_id: flow.owner_id, source: 'payment', external_order_id: orderContext.sourceOrderId, ...leadValues }).select().single();
       // Dois webhooks iguais podem chegar no mesmo milissegundo. A restrição
       // única do banco é a autoridade; em conflito, reutilizamos a execução
       // que venceu a corrida em vez de criar uma segunda música para o pedido.

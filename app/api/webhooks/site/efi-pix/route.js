@@ -2,6 +2,7 @@ import { createHash, timingSafeEqual } from 'crypto';
 import { NextResponse } from 'next/server';
 import { adminClient } from '../../../supabase';
 import { credentialsFor, efiRequest } from '../../../flow-engine';
+import { resolveSiteDispatchConnection, resolveSiteFlowConfig } from '../../../site-connection';
 
 export const runtime = 'nodejs';
 
@@ -64,9 +65,7 @@ function fulfillmentMode(body) { return body.fulfillment?.mode || body.quiz?.ful
 async function resolveSiteIntegration(db, integrationKey) {
   const { data: integration } = await db.from('site_integrations').select('owner_id,connection_id').eq('integration_key', integrationKey).maybeSingle();
   if (!integration?.owner_id) return null;
-  const connection = integration.connection_id
-    ? (await db.from('connections').select('*').eq('id', integration.connection_id).eq('owner_id', integration.owner_id).maybeSingle()).data
-    : null;
+  const connection = await resolveSiteDispatchConnection(db, { ownerId: integration.owner_id, connectionId: integration.connection_id });
   return { ...integration, connection };
 }
 
@@ -109,15 +108,15 @@ export async function POST(request) {
     if (!['deliver_existing_preview_audio', 'generate_music_in_miniflux'].includes(mode)) return NextResponse.json({ error: 'fulfillment.mode deve ser deliver_existing_preview_audio ou generate_music_in_miniflux.' }, { status: 400 });
     const audios = previewAudios(body);
     if (mode === 'deliver_existing_preview_audio' && audios.length !== 2) return NextResponse.json({ error: 'A entrega da prévia exige exatamente duas URLs em preview.audios.' }, { status: 422 });
-    let { data: config } = connection
-      ? await db.from('connection_flow_configs').select('payment_preview_flow_id,payment_generation_flow_id,owner_id').eq('connection_id', connection.id).maybeSingle()
-      : { data: null };
+    const flowField = mode === 'deliver_existing_preview_audio' ? 'payment_preview_flow_id' : 'payment_generation_flow_id';
+    let config = connection
+      ? await resolveSiteFlowConfig(db, { ownerId: integration.owner_id, connectionId: connection.id, flowField })
+      : null;
     // Caso a conexão seja removida ou esteja em manutenção, o checkout Efí
     // continua elegendo o último fluxo de entrega da mesma conta. Não há
     // dependência de status, número ou sessão de WhatsApp.
     if (!config) {
-      const fallback = await db.from('connection_flow_configs').select('payment_preview_flow_id,payment_generation_flow_id,owner_id').eq('owner_id', integration.owner_id).not('payment_generation_flow_id', 'is', null).order('updated_at', { ascending: false }).limit(1).maybeSingle();
-      config = fallback.data;
+      config = await resolveSiteFlowConfig(db, { ownerId: integration.owner_id, flowField });
     }
     if (!config || config.owner_id !== integration.owner_id) return NextResponse.json({ error: 'Configure um fluxo de entrega para a integração do site.' }, { status: 409 });
     const paymentFlowId = mode === 'deliver_existing_preview_audio' ? config.payment_preview_flow_id : config.payment_generation_flow_id;

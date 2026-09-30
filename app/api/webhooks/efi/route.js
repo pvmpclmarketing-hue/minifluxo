@@ -3,7 +3,7 @@ import { NextResponse } from 'next/server';
 import { adminClient } from '../../supabase';
 import { sendTemplate } from '../../provider';
 import { executeFlow } from '../../flow-engine';
-import { resolveOfficialSiteConnection } from '../../site-connection';
+import { resolveSiteDispatchConnection } from '../../site-connection';
 import { appendChatMessage } from '../../chat-history';
 import { paymentTemplate } from '../../whatsapp-templates';
 
@@ -71,7 +71,7 @@ export async function POST(request) {
     // transformamos o lead em um pagamento recuperável; se a conexão estiver
     // indisponível, o cron retoma pela conexão ativa assim que ela voltar.
     if (!lead) { processed.push({ txid, error: 'Lead do pagamento não encontrado.' }); continue; }
-    const connection = await resolveOfficialSiteConnection(db, { connectionId: claimed.connection_id || lead.connection_id });
+    const connection = await resolveSiteDispatchConnection(db, { ownerId: claimed.owner_id, connectionId: claimed.connection_id || lead.connection_id });
     // `node_id` é o card "Pagamento confirmado" gravado quando o QR Code foi
     // criado. Ele é o checkpoint correto para uma confirmação Efí: depois que
     // o cliente responder ao template da Meta, o fluxo deve continuar *após*

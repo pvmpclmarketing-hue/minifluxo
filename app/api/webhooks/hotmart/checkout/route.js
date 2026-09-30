@@ -1,7 +1,7 @@
 import { randomUUID } from 'crypto';
 import { NextResponse } from 'next/server';
 import { adminClient } from '../../../supabase';
-import { resolveOfficialSiteConnection } from '../../../site-connection';
+import { resolveSiteDispatchConnection, resolveSiteFlowConfig } from '../../../site-connection';
 
 export const runtime = 'nodejs';
 
@@ -24,10 +24,10 @@ export async function POST(request) {
     if (!String(body.name || '').trim() || !phone || !lyricText) return NextResponse.json({ error: 'name, phone e lyric_text sao obrigatorios.' }, { status: 400 });
 
     const db = adminClient();
-    const connection = await resolveOfficialSiteConnection(db, { integrationKey: body.integration_key, connectionId: body.connection_id });
-    if (!connection) return NextResponse.json({ error: 'Canal oficial do site nao encontrado ou indisponivel.' }, { status: 400 });
+    const connection = await resolveSiteDispatchConnection(db, { integrationKey: body.integration_key, connectionId: body.connection_id });
+    if (!connection) return NextResponse.json({ error: 'Canal WhatsApp do site nao encontrado ou indisponivel.' }, { status: 400 });
 
-    const { data: config } = await db.from('connection_flow_configs').select('owner_id,payment_generation_flow_id').eq('connection_id', connection.id).maybeSingle();
+    const config = await resolveSiteFlowConfig(db, { ownerId: connection.owner_id, connectionId: connection.id, flowField: 'payment_generation_flow_id' });
     if (!config?.owner_id || !config.payment_generation_flow_id) return NextResponse.json({ error: 'Configure o fluxo de pagamento que gera musica para o canal oficial.' }, { status: 409 });
 
     const sck = `mfmx_${randomUUID().replace(/-/g, '')}`;

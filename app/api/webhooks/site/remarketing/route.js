@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { timingSafeEqual } from 'crypto';
 import { adminClient } from '../../../supabase';
-import { resolveOfficialSiteConnection } from '../../../site-connection';
+import { resolveSiteDispatchConnection, resolveSiteFlowConfig } from '../../../site-connection';
 
 // O site e o Mini Fluxo são serviços distintos e podem estar em fases de
 // rotação de segredo diferentes. Aceitamos somente os segredos privados já
@@ -43,9 +43,9 @@ export async function POST(request) {
     }
 
     const db = adminClient();
-    const connection = await resolveOfficialSiteConnection(db, { integrationKey: body.integration_key, connectionId: body.connection_id });
-    if (!connection) return NextResponse.json({ error: 'Canal oficial do site não encontrado ou indisponível.' }, { status: 400 });
-    const { data: config } = await db.from('connection_flow_configs').select('owner_id,remarketing_flow_id').eq('connection_id', connection.id).maybeSingle();
+    const connection = await resolveSiteDispatchConnection(db, { integrationKey: body.integration_key, connectionId: body.connection_id });
+    if (!connection) return NextResponse.json({ error: 'Canal WhatsApp do site não encontrado ou indisponível.' }, { status: 400 });
+    const config = await resolveSiteFlowConfig(db, { ownerId: connection.owner_id, connectionId: connection.id, flowField: 'remarketing_flow_id' });
     if (!config?.remarketing_flow_id || config.owner_id !== connection.owner_id) return NextResponse.json({ error: 'Configure o fluxo de remarketing desta conexao.' }, { status: 409 });
     const { data: flow } = await db.from('flows').select('id,status').eq('id', config.remarketing_flow_id).eq('owner_id', config.owner_id).maybeSingle();
     if (!flow || flow.status !== 'active') return NextResponse.json({ error: 'O fluxo de remarketing configurado nao esta ativo.' }, { status: 409 });

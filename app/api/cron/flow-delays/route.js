@@ -4,6 +4,7 @@ import { executeFlow, recoverKieGeneration, retryKieDelivery } from '../../flow-
 import { sendTemplate } from '../../provider';
 import { appendChatMessage } from '../../chat-history';
 import { paymentTemplate, recoveryTemplate, remarketingTemplate } from '../../whatsapp-templates';
+import { resolveSiteDispatchConnection, resolveSiteFlowConfig } from '../../site-connection';
 
 export async function POST(request) {
   // Em instalações antigas o segredo exclusivo do cron pode não existir. O
@@ -161,10 +162,8 @@ export async function POST(request) {
       );
       const phone = String(item.phone || '').replace(/\D/g, '');
       if (context.paid || alreadySent || !/^55\d{10,11}$/.test(phone)) continue;
-      const [{ data: connection }, { data: config }] = await Promise.all([
-        db.from('connections').select('*').eq('id', item.connection_id).eq('owner_id', item.owner_id).eq('provider', 'meta').eq('status', 'connected').maybeSingle(),
-        db.from('connection_flow_configs').select('owner_id,remarketing_flow_id').eq('connection_id', item.connection_id).maybeSingle(),
-      ]);
+      const connection = await resolveSiteDispatchConnection(db, { ownerId: item.owner_id, connectionId: item.connection_id });
+      const config = connection && await resolveSiteFlowConfig(db, { ownerId: item.owner_id, connectionId: connection.id, flowField: 'remarketing_flow_id' });
       if (!connection || !config?.remarketing_flow_id || config.owner_id !== item.owner_id) {
         automaticRemarketingTemplateErrors.push({ lead_id: item.id, reason: 'remarketing_channel_or_flow_unavailable' });
         continue;
@@ -172,6 +171,23 @@ export async function POST(request) {
       const { data: flow } = await db.from('flows').select('*').eq('id', config.remarketing_flow_id).eq('owner_id', item.owner_id).eq('status', 'active').maybeSingle();
       if (!flow) {
         automaticRemarketingTemplateErrors.push({ lead_id: item.id, reason: 'remarketing_flow_unavailable' });
+        continue;
+      }
+      if (connection.provider === 'uazapi') {
+        const { data: claimed } = await db.from('leads').update({
+          status: 'in_progress',
+          connection_id: connection.id,
+          provider: connection.provider,
+          order_context: {
+            ...context,
+            remarketing: { ...(context.remarketing || {}), origin: 'site_unpaid_pix', flow_id: flow.id, dispatched_at: new Date().toISOString() },
+            flow_execution: { flow_id: flow.id, remarketing_dispatched_at: new Date().toISOString() },
+          },
+          updated_at: new Date().toISOString(),
+        }).eq('id', item.id).eq('owner_id', item.owner_id).eq('status', 'waiting_pix').select().maybeSingle();
+        if (!claimed) continue;
+        await executeFlow({ db, flow, lead: claimed, connection });
+        automaticRemarketingTemplatesSent += 1;
         continue;
       }
       const template = remarketingTemplate();
@@ -185,6 +201,8 @@ export async function POST(request) {
       });
       const { data: claimed } = await db.from('leads').update({
         status: 'waiting_response',
+        connection_id: connection.id,
+        provider: connection.provider,
         order_context: {
           ...(withHistory.order_context || {}),
           remarketing: { ...(withHistory.order_context?.remarketing || {}), origin: 'site_unpaid_pix', flow_id: flow.id, template_sent_at: new Date().toISOString(), template_message_id: messageId, automatic_dispatch_at: new Date().toISOString() },
@@ -354,19 +372,9 @@ export async function POST(request) {
     const hasFlowExecution = Boolean(context.flow_execution && Object.keys(context.flow_execution).length);
     if (!context.paid || context.fulfillment_mode !== 'generate_music_in_miniflux' || hasFlowExecution || item.kie_task_id || item.music_url || !String(context.lyricText || '').trim()) continue;
     try {
-      let connection = null;
-      if (item.connection_id) {
-        const { data: original } = await db.from('connections').select('*').eq('id', item.connection_id).eq('owner_id', item.owner_id).eq('status', 'connected').maybeSingle();
-        connection = original;
-      }
-      // Só migra para outra conexão quando há exatamente um WhatsApp ativo na
-      // conta; com dois números não é seguro adivinhar o destinatário.
-      if (!connection) {
-        const { data: connections } = await db.from('connections').select('*').eq('owner_id', item.owner_id).eq('status', 'connected').order('created_at', { ascending: false }).limit(2);
-        if ((connections || []).length !== 1) continue;
-        connection = connections[0];
-      }
-      const { data: config } = await db.from('connection_flow_configs').select('payment_generation_flow_id,owner_id').eq('connection_id', connection.id).maybeSingle();
+      const connection = await resolveSiteDispatchConnection(db, { ownerId: item.owner_id, connectionId: item.connection_id });
+      if (!connection) continue;
+      const config = await resolveSiteFlowConfig(db, { ownerId: item.owner_id, connectionId: connection.id, flowField: 'payment_generation_flow_id' });
       if (!config?.payment_generation_flow_id || config.owner_id !== item.owner_id) continue;
       const { data: flow } = await db.from('flows').select('*').eq('id', config.payment_generation_flow_id).eq('owner_id', item.owner_id).eq('status', 'active').maybeSingle();
       if (!flow) continue;
@@ -382,7 +390,24 @@ export async function POST(request) {
       }).eq('id', item.id).eq('owner_id', item.owner_id).eq('status', 'in_progress').is('kie_task_id', null);
       const { data: claimed } = await claim.select().maybeSingle();
       if (!claimed) continue;
-      await executeFlow({ db, flow, lead: claimed, connection });
+      if (connection.provider === 'meta') {
+        const template = paymentTemplate();
+        const result = await sendTemplate(connection, claimed.phone, template.name, template.language);
+        const messageId = String(result?.messages?.[0]?.id || result?.data?.messages?.[0]?.id || `template-recovery-${Date.now()}`);
+        const withHistory = await appendChatMessage(db, claimed, { id: messageId, direction: 'out', type: 'text', text: 'Olá! Tudo bem? 😊\n\nPosso enviar sua música? Me responda que já inicio o processo!' });
+        const { error: gateError } = await db.from('leads').update({
+          status: 'waiting_response',
+          order_context: {
+            ...(withHistory.order_context || {}),
+            reengagement: { ...(withHistory.order_context?.reengagement || {}), initial_template_sent_at: new Date().toISOString() },
+            flow_execution: { flow_id: flow.id, reengagement_template: true, template_message_id: messageId },
+          },
+          updated_at: new Date().toISOString(),
+        }).eq('id', claimed.id).eq('owner_id', claimed.owner_id).eq('connection_id', connection.id);
+        if (gateError) throw gateError;
+      } else {
+        await executeFlow({ db, flow, lead: claimed, connection });
+      }
       recoveredUnstarted += 1;
     } catch (recoveryError) {
       console.error('[flow recovery] failed', { leadId: item.id, error: recoveryError.message });
@@ -411,10 +436,8 @@ export async function POST(request) {
     if (execution?.remarketing_eligible_at) {
       if (item.order_context?.paid || Date.parse(execution.remarketing_eligible_at) > now) continue;
       try {
-        const [{ data: flow }, { data: connection }] = await Promise.all([
-          db.from('flows').select('*').eq('id', remarketing?.flow_id).eq('owner_id', item.owner_id).eq('status', 'active').maybeSingle(),
-          db.from('connections').select('*').eq('id', item.connection_id).eq('owner_id', item.owner_id).eq('status', 'connected').maybeSingle(),
-        ]);
+        const { data: flow } = await db.from('flows').select('*').eq('id', remarketing?.flow_id).eq('owner_id', item.owner_id).eq('status', 'active').maybeSingle();
+        const connection = await resolveSiteDispatchConnection(db, { ownerId: item.owner_id, connectionId: item.connection_id });
         if (!flow || !connection) continue;
         // Fora da janela de atendimento a API oficial só permite iniciar o
         // contato por template aprovado. A resposta do cliente será tratada
@@ -432,6 +455,8 @@ export async function POST(request) {
           });
           const { data: claimed } = await db.from('leads').update({
             status: 'waiting_response',
+            connection_id: connection.id,
+            provider: connection.provider,
             order_context: {
               ...(withHistory.order_context || {}),
               remarketing: {
@@ -455,6 +480,8 @@ export async function POST(request) {
         }
         const { data: claimed } = await db.from('leads').update({
           status: 'in_progress',
+          connection_id: connection.id,
+          provider: connection.provider,
           order_context: {
             ...(item.order_context || {}),
             remarketing: { ...(remarketing || {}), dispatched_at: new Date().toISOString() },

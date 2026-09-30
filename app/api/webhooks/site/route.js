@@ -2,16 +2,16 @@ import { NextResponse } from 'next/server';
 import { adminClient } from '../../supabase';
 import { sendText } from '../../provider';
 import { executeFlow } from '../../flow-engine';
-import { resolveOfficialSiteConnection } from '../../site-connection';
+import { resolveSiteDispatchConnection, resolveSiteFlowConfig } from '../../site-connection';
 
 export async function POST(request) {
   if (process.env.SITE_WEBHOOK_SECRET && request.headers.get('x-site-secret') !== process.env.SITE_WEBHOOK_SECRET) return new NextResponse(null,{status:401});
   const body=await request.json(); const phone=String(body.phone||'').replace(/\D/g,'');
   if(!body.name||!phone) return NextResponse.json({error:'name e phone sao obrigatorios.'},{status:400});
-  const db=adminClient(); const connection=await resolveOfficialSiteConnection(db,{integrationKey:body.integration_key,connectionId:body.connection_id});
-  if(!connection)return NextResponse.json({error:'Canal oficial do site não encontrado ou indisponível.'},{status:400});
-  const {data:config}=await db.from('connection_flow_configs').select('site_flow_id,owner_id').eq('connection_id',connection.id).maybeSingle();
-  if(config?.owner_id!==connection.owner_id)return NextResponse.json({error:'A configuração não pertence à conta desta conexão.'},{status:403});
+  const db=adminClient(); const connection=await resolveSiteDispatchConnection(db,{integrationKey:body.integration_key,connectionId:body.connection_id});
+  if(!connection)return NextResponse.json({error:'Canal WhatsApp do site não encontrado ou indisponível.'},{status:400});
+  const config=await resolveSiteFlowConfig(db,{ownerId:connection.owner_id,connectionId:connection.id,flowField:'site_flow_id'});
+  if(config&&config.owner_id!==connection.owner_id)return NextResponse.json({error:'A configuração não pertence à conta desta conexão.'},{status:403});
   if(!config?.site_flow_id)return NextResponse.json({error:'Nenhum fluxo de site configurado para esta conexao.'},{status:404});
   const context={quiz:body.quiz||{},story:body.story||'',lyricText:body.lyric_text||body.lyricText||'',paid:!!body.paid,sourceOrderId:body.order_id||body.orderId||null};
   const musicRequest=body.music_request||body.musicRequest||context.lyricText||context.story||null;
