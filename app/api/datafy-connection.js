@@ -24,8 +24,9 @@ export async function inspectDatafyConnection() {
   const numbers = Array.isArray(numbersPayload?.data) ? numbersPayload.data : [];
   const number = numbers.find((item) => String(item?.id || '') === phoneNumberId);
   if (!number) return { connected: false, reason: 'phone_number_not_found' };
+  const phoneSuffix = String(number.display_phone_number || '').replace(/\D/g, '').slice(-4);
   if (String(number.status || '').toUpperCase() !== 'CONNECTED') {
-    return { connected: false, reason: 'phone_number_not_connected' };
+    return { connected: false, reason: 'phone_number_not_connected', phoneSuffix };
   }
   return { connected: true, displayPhone: String(number.display_phone_number || '').trim() };
 }

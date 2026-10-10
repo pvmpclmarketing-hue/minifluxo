@@ -16,7 +16,7 @@ async function activateVerifiedDatafyConnection(db) {
   if (officialConnections?.length !== 1 || officialConnections[0].status === 'connected') return;
   const health = await inspectDatafyConnection();
   if (!health.connected) {
-    console.warn('[datafy activation] pending', { reason: health.reason });
+    console.warn('[datafy activation] pending', { reason: health.reason, phone_suffix: health.phoneSuffix || null });
     return;
   }
   const connection = officialConnections[0];
