@@ -72,6 +72,9 @@ alter table public.connection_flow_configs add column if not exists backup_respo
 -- Dois gatilhos de pagamento independentes: prévia pronta ou geração no WhatsEntregavel.
 alter table public.connection_flow_configs add column if not exists payment_preview_flow_id uuid references public.flows(id) on delete set null;
 alter table public.connection_flow_configs add column if not exists payment_generation_flow_id uuid references public.flows(id) on delete set null;
+alter table public.connection_flow_configs add column if not exists relationship_flow_id uuid references public.flows(id) on delete set null;
+alter table public.connection_flow_configs add column if not exists relationship_template_name text;
+alter table public.connection_flow_configs add column if not exists relationship_template_language text;
 -- Preserva o comportamento das contas existentes: o fluxo antigo passa a ser o de geração sem prévia.
 update public.connection_flow_configs set payment_generation_flow_id = payment_flow_id where payment_generation_flow_id is null and payment_flow_id is not null;
 

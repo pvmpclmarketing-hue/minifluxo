@@ -45,12 +45,40 @@ async function trackDeliveryStatus(db,connection,status){
   const messageId=String(status?.id||'');if(!messageId)return {ignored:true,reason:'status_without_message_id'};
   const {data:leads,error}=await db.from('leads').select('*').eq('connection_id',connection.id).order('updated_at',{ascending:false}).limit(500);
   if(error)throw error;
-  const lead=(leads||[]).find(item=>Object.values(item.order_context?.delivery?.message_ids||{}).some(value=>String(value?.id||value)===messageId));
+  let relationshipLead=null;
+  const {data:exactRelationshipLead,error:relationshipLookupError}=await db.from('leads').select('*').eq('connection_id',connection.id)
+    .contains('order_context',{relationship_dispatch:{message_id:messageId}}).maybeSingle();
+  if(relationshipLookupError)throw relationshipLookupError;
+  if(exactRelationshipLead)relationshipLead=exactRelationshipLead;
+  const lead=relationshipLead||(leads||[]).find(item=>{
+    const context=item.order_context||{};
+    const execution=context.flow_execution||{};
+    const relationship=context.relationship_dispatch||{};
+    return String(execution.template_message_id||'')===messageId
+      || String(relationship.message_id||'')===messageId
+      || Object.values(context.delivery?.message_ids||{}).some(value=>String(value?.id||value)===messageId);
+  });
   if(!lead)return {ignored:true,reason:'flow_message_not_found'};
   const delivery=lead.order_context?.delivery||{};
   const receivedStatus=String(status.status||'sent');
   const message_statuses={...(delivery.message_statuses||{}),[messageId]:{status:receivedStatus,timestamp:status.timestamp?new Date(Number(status.timestamp)*1000).toISOString():new Date().toISOString(),recipient_id:String(status.recipient_id||''),errors:Array.isArray(status.errors)?status.errors.map(item=>({code:item.code,title:item.title,message:item.message})):[]}};
-  const {data:updatedLead,error:updateError}=await db.from('leads').update({order_context:{...(lead.order_context||{}),delivery:{...delivery,message_statuses}},updated_at:new Date().toISOString()}).eq('id',lead.id).eq('owner_id',lead.owner_id).eq('connection_id',connection.id).select().single();
+  const context=lead.order_context||{};
+  const relationship=context.relationship_dispatch||{};
+  const isRelationshipTemplate=String(relationship.message_id||context.flow_execution?.template_message_id||'')===messageId;
+  const eventAt=status.timestamp?new Date(Number(status.timestamp)*1000).toISOString():new Date().toISOString();
+  const relationshipUpdates={
+    sent: relationship.sent_at ? {} : {sent_at:eventAt},
+    delivered: {delivered_at:relationship.delivered_at||eventAt},
+    read: {read_at:relationship.read_at||eventAt},
+    failed: {failed_at:relationship.failed_at||eventAt},
+  }[receivedStatus]||{};
+  const updatedRelationship=isRelationshipTemplate?{
+    ...relationship,
+    message_statuses:{...(relationship.message_statuses||{}),[messageId]:{status:receivedStatus,timestamp:eventAt,recipient_id:String(status.recipient_id||''),errors:Array.isArray(status.errors)?status.errors.map(item=>({code:item.code,title:item.title,message:item.message})):[]}},
+    ...relationshipUpdates,
+    last_status:receivedStatus,
+  }:relationship;
+  const {data:updatedLead,error:updateError}=await db.from('leads').update({order_context:{...context,delivery:{...delivery,message_statuses},...(isRelationshipTemplate?{relationship_dispatch:updatedRelationship}:{})},updated_at:new Date().toISOString()}).eq('id',lead.id).eq('owner_id',lead.owner_id).eq('connection_id',connection.id).select().single();
   if(updateError)throw updateError;
 
   // Um vídeo com próximo card mantém o fluxo parado até o recibo "delivered"
@@ -59,7 +87,7 @@ async function trackDeliveryStatus(db,connection,status){
   // O claim pelo status impede que recibos posteriores reiniciem o trecho.
   const execution=updatedLead.order_context?.flow_execution||{};
   const videoReady=execution.wait_for_media_delivery&&String(execution.media_message_id||'')===messageId&&['delivered','read'].includes(receivedStatus);
-  if(!videoReady||updatedLead.status!=='waiting_media_delivery')return {tracked:true,lead_id:updatedLead.id,status:receivedStatus};
+  if(!videoReady||updatedLead.status!=='waiting_media_delivery')return {tracked:true,lead_id:updatedLead.id,status:receivedStatus,relationship_template:isRelationshipTemplate};
   const {data:flow}=await db.from('flows').select('*').eq('id',execution.flow_id).eq('owner_id',updatedLead.owner_id).eq('status','active').maybeSingle();
   if(!flow)return {tracked:true,lead_id:updatedLead.id,status:receivedStatus,ignored:'flow_unavailable'};
   const {data:claimed,error:claimError}=await db.from('leads').update({status:'in_progress',order_context:{...(updatedLead.order_context||{}),flow_execution:null,media_delivery:{message_id:messageId,status:receivedStatus,resumed_at:new Date().toISOString()}},updated_at:new Date().toISOString()}).eq('id',updatedLead.id).eq('owner_id',updatedLead.owner_id).eq('connection_id',connection.id).eq('status','waiting_media_delivery').select().maybeSingle();
@@ -83,7 +111,21 @@ async function resumeMessage(db, connection, message, contact) {
   const { data: candidates } = await db.from('leads')
     .select('*').eq('connection_id', connection.id).in('phone', phoneCandidates)
     .order('updated_at', { ascending: false }).limit(2);
-  const latest = (candidates || [])[0];
+  const candidateRows = candidates || [];
+  const repliedMessageId = String(message?.context?.id || '');
+  let exactRelationshipLead = null;
+  if (repliedMessageId) {
+    const { data } = await db.from('leads').select('*').eq('connection_id', connection.id).in('phone', phoneCandidates)
+      .contains('order_context', { flow_execution: { template_message_id: repliedMessageId } }).maybeSingle();
+    exactRelationshipLead = data;
+  }
+  const relationshipLead = candidateRows.find((item) => {
+    const execution = item.order_context?.flow_execution || {};
+    const isRelationship = ['relationship', 'relacioanamento'].includes(execution.template_trigger);
+    return isRelationship && ['waiting_response', 'timed_out'].includes(item.status)
+      && (!repliedMessageId || !execution.template_message_id || String(execution.template_message_id) === repliedMessageId);
+  });
+  const latest = exactRelationshipLead || relationshipLead || candidateRows[0];
   if (!latest) return { ignored: true, reason: 'no_lead' };
   // Para a resposta ao template, qualquer interação abre a janela de 24h:
   // texto, botão, áudio, imagem, documento ou figurinha. Preservamos um
@@ -107,7 +149,7 @@ async function resumeMessage(db, connection, message, contact) {
 
   // Um template de convite não inicia o curso ao ser apenas entregue ou lido.
   // Somente o clique no botão aprovado "Quero Sim" autoriza a primeira etapa.
-  if (execution.template_trigger === 'relacioanamento') {
+  if (['relationship', 'relacioanamento'].includes(execution.template_trigger)) {
     if (!matchesTemplateQuickReply(message, 'Quero Sim')) {
       return { received: true, ignored: true, reason: 'template_quick_reply_required' };
     }
@@ -122,6 +164,9 @@ async function resumeMessage(db, connection, message, contact) {
         ...context,
         flow_execution: null,
         template_trigger: { ...(context.template_trigger || {}), clicked_at: new Date().toISOString(), button: 'Quero Sim' },
+        relationship_dispatch: ['relationship','relacioanamento'].includes(execution.template_trigger)
+          ? { ...(context.relationship_dispatch||{}), clicked_at: new Date().toISOString(), clicked_button: 'Quero Sim', click_message_id: String(message?.id||''), clicked_template_message_id: String(execution.template_message_id||'') }
+          : context.relationship_dispatch,
       },
       updated_at: new Date().toISOString(),
     }).eq('id', existing.id).eq('owner_id', existing.owner_id).eq('connection_id', connection.id)

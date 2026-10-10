@@ -13,6 +13,17 @@ export async function POST(request) {
       if(!backup || backup.provider!=='uazapi')return NextResponse.json({error:'Escolha uma conexão UazAPI válida como número reserva.'},{status:400});
     }
     const backupMinutes=Math.max(5,Math.min(1440,Number(body.backup_response_timeout_minutes||50)));
+    const relationshipFlowId=String(body.relationship_flow_id||'').trim()||null;
+    const relationshipTemplateName=String(body.relationship_template_name||'').trim().toLowerCase();
+    const relationshipTemplateLanguage=String(body.relationship_template_language||'pt_BR').trim();
+    if(relationshipFlowId){
+      const {data:relationshipFlow,error:relationshipFlowError}=await db.from('flows').select('id').eq('id',relationshipFlowId).eq('owner_id',user.id).eq('status','active').maybeSingle();
+      if(relationshipFlowError)throw relationshipFlowError;
+      if(!relationshipFlow)return NextResponse.json({error:'Escolha um fluxo ativo da sua conta para o template de relacionamento.'},{status:400});
+      if(connection.provider!=='meta')return NextResponse.json({error:'Templates aprovados de relacionamento precisam de uma conexão Meta oficial.'},{status:400});
+      if(!relationshipTemplateName)return NextResponse.json({error:'Informe o nome aprovado do template de relacionamento.'},{status:400});
+      if(!/^[a-z0-9_]+$/.test(relationshipTemplateName))return NextResponse.json({error:'O nome do template deve usar apenas letras minúsculas, números e underline.'},{status:400});
+    }
     const payload={
       connection_id:connection.id,
       owner_id:user.id,
@@ -20,6 +31,9 @@ export async function POST(request) {
       payment_generation_flow_id:body.payment_generation_flow_id||null,
       site_flow_id:body.site_flow_id||null,
       remarketing_flow_id:body.remarketing_flow_id||null,
+      relationship_flow_id:relationshipFlowId,
+      relationship_template_name:relationshipFlowId?relationshipTemplateName:null,
+      relationship_template_language:relationshipFlowId?relationshipTemplateLanguage:null,
       backup_connection_id:backupConnectionId,
       backup_flow_id:body.backup_flow_id||null,
       backup_response_timeout_minutes:backupMinutes,

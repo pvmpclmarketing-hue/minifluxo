@@ -100,7 +100,7 @@ function Dispatches({connections,flows,configs,save}){
   const reserves=connections.filter(connection=>connection.provider==='uazapi');
   if(!connections.length)return <Empty text="Conecte um WhatsApp Meta ou UazAPI antes de configurar os disparos."/>;
   const fallback=configs.find(item=>item.payment_generation_flow_id||item.payment_preview_flow_id||item.site_flow_id)||{};
-  return <section className="dispatch-list">{connections.map(connection=>{
+  return <><RelationshipTracking connections={connections}/><section className="dispatch-list">{connections.map(connection=>{
     const config=configs.find(item=>item.connection_id===connection.id)||fallback;
     return <form key={connection.id} className="dispatch-card" onSubmit={save}>
       <input type="hidden" name="connection_id" value={connection.id}/>
@@ -109,10 +109,98 @@ function Dispatches({connections,flows,configs,save}){
       <label>Fluxo para pagamento sem música da prévia pronta<select name="payment_generation_flow_id" defaultValue={config.payment_generation_flow_id||''}><option value="">Não disparar</option>{flows.map(flow=><option key={flow.id} value={flow.id}>{flow.name}</option>)}</select><small>Usado com <code>fulfillment.mode: generate_music_in_miniflux</code>.</small></label>
       {connection.provider==='meta'&&<fieldset className="backup-dispatch"><legend>Número reserva se não houver resposta</legend><label>Número UazAPI reserva<select name="backup_connection_id" defaultValue={config.backup_connection_id||''}><option value="">Não usar número reserva</option>{reserves.map(reserve=><option key={reserve.id} value={reserve.id} disabled={reserve.status!=='connected'}>{reserve.name}{reserve.status==='connected'?'':' (desconectado)'}</option>)}</select></label><label>Esperar antes de assumir (minutos)<input name="backup_response_timeout_minutes" type="number" min="5" max="1440" defaultValue={config.backup_response_timeout_minutes||50}/></label><label>Fluxo iniciado pelo reserva<select name="backup_flow_id" defaultValue={config.backup_flow_id||''}><option value="">Usar o mesmo fluxo de pagamento</option>{flows.map(flow=><option key={flow.id} value={flow.id}>{flow.name}</option>)}</select></label></fieldset>}
       <label>Fluxo de remarketing do site<select name="remarketing_flow_id" defaultValue={config.remarketing_flow_id||''}><option value="">Não disparar</option>{flows.map(flow=><option key={flow.id} value={flow.id}>{flow.name}</option>)}</select></label>
+      {connection.provider==='meta'&&<fieldset className="backup-dispatch"><legend>Template de relacionamento</legend><label>Nome do template aprovado<input name="relationship_template_name" defaultValue={config.relationship_template_name||'relacionamento'} pattern="[a-z0-9_]+" placeholder="relacionamento"/><small>Use o nome técnico aprovado no WhatsApp Manager.</small></label><label>Idioma do template<input name="relationship_template_language" defaultValue={config.relationship_template_language||'pt_BR'} placeholder="pt_BR"/></label><label>Iniciar este fluxo quando a pessoa clicar em “Quero Sim”<select name="relationship_flow_id" defaultValue={config.relationship_flow_id||flows.find(flow=>flow.name.toLocaleLowerCase('pt-BR')==='curso')?.id||''}><option value="">Não iniciar fluxo</option>{flows.map(flow=><option key={flow.id} value={flow.id}>{flow.name}</option>)}</select></label><small>O template é enviado manualmente só depois que você indicar os destinatários. A leitura, por si só, não inicia o Curso.</small></fieldset>}
       <label>Fluxo para pedido vindo do site<select name="site_flow_id" defaultValue={config.site_flow_id||''}><option value="">Não disparar</option>{flows.map(flow=><option key={flow.id} value={flow.id}>{flow.name}</option>)}</select></label>
       <button className="primary">Salvar disparos</button>
     </form>;
-  })}</section>;
+  })}</section></>;
+}
+function RelationshipTracking({connections}) {
+  const [records, setRecords] = useState([]);
+  const [hasMore, setHasMore] = useState(false);
+  const [nextOffset, setNextOffset] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const metaConnections = connections.filter(item => item.provider === 'meta');
+  const [selectedConnectionId, setSelectedConnectionId] = useState('');
+  const connectionId = metaConnections.some(item => item.id === selectedConnectionId)
+    ? selectedConnectionId
+    : metaConnections.find(item => item.status === 'connected')?.id || metaConnections[0]?.id || '';
+
+  useEffect(() => {
+    if (!connectionId) return undefined;
+    let active = true;
+    const load = async () => {
+      setLoading(true);
+      try {
+        const response = await fetch(`/api/dispatches/relationship?connection_id=${encodeURIComponent(connectionId)}`, { cache: 'no-store' });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || 'Falha ao consultar os resultados.');
+        if (active) { setRecords(data.recipients || []); setHasMore(Boolean(data.has_more)); setNextOffset(data.next_offset || 0); setError(''); }
+      } catch (loadError) {
+        if (active) setError(loadError.message || 'Falha ao consultar os resultados.');
+      } finally { if (active) setLoading(false); }
+    };
+    void load();
+    const timer = window.setInterval(load, 60000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [connectionId]);
+
+  async function loadMore() {
+    if (!connectionId || loading) return;
+    setLoading(true);
+    try {
+      const response = await fetch(`/api/dispatches/relationship?connection_id=${encodeURIComponent(connectionId)}&offset=${nextOffset}`, { cache: 'no-store' });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Falha ao consultar os resultados.');
+      setRecords(current => [...current, ...(data.recipients || [])]);
+      setHasMore(Boolean(data.has_more));
+      setNextOffset(data.next_offset || 0);
+      setError('');
+    } catch (loadError) { setError(loadError.message || 'Falha ao consultar os resultados.'); }
+    finally { setLoading(false); }
+  }
+
+  const sent = records.filter(item => item.order_context?.relationship_dispatch?.sent_at).length;
+  const delivered = records.filter(item => item.order_context?.relationship_dispatch?.delivered_at).length;
+  const read = records.filter(item => item.order_context?.relationship_dispatch?.read_at).length;
+  const clicked = records.filter(item => item.order_context?.relationship_dispatch?.clicked_at).length;
+  const date = value => value ? new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(value)) : '—';
+
+  return (
+    <section className="table-card">
+      <div className="table-head">
+        <div><h2>Resultados · Relacionamento</h2><small>Atualiza a cada minuto. “Entregue” confirma o recebimento no WhatsApp.{hasMore ? ' O resumo considera os contatos carregados; carregue os anteriores para ampliar.' : ''}</small></div>
+        {metaConnections.length > 1 && <select aria-label="Conexão Meta" value={connectionId} onChange={event => setSelectedConnectionId(event.target.value)}>{metaConnections.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select>}
+      </div>
+      {!metaConnections.length ? <Empty text="Conecte uma conta Meta oficial para registrar os status do template."/> : (
+        <>
+          <section className="metrics" style={{ padding: '18px 22px' }}>
+            <Metric label="Enviados" value={sent}/><Metric label="Entregues" value={delivered}/><Metric label="Lidos" value={read}/><Metric label="Clicaram em Quero Sim" value={clicked}/>
+          </section>
+          {error && <p className="form-error" style={{ padding: '0 22px' }}>{error}</p>}
+          {records.length ? (
+            <div className="lead-list">
+              {records.map(item => {
+                const dispatch = item.order_context?.relationship_dispatch || {};
+                const deliveryLabel = dispatch.delivered_at ? 'Entregue' : dispatch.failed_at ? 'Falhou' : 'Aguardando';
+                return (
+                  <article className="lead-row" key={item.id}>
+                    <div className="avatar">{(item.name || 'C')[0]}</div>
+                    <div style={{ minWidth: 180 }}><b>{item.name || 'Contato'}</b><small>+{item.phone} · enviado {date(dispatch.sent_at)}</small></div>
+                    <span className={'status ' + (dispatch.delivered_at ? 'completed' : '')}>{deliveryLabel} {date(dispatch.delivered_at || dispatch.failed_at)}</span>
+                    <span className={'status ' + (dispatch.read_at ? 'completed' : '')}>Lido {date(dispatch.read_at)}</span>
+                    <span className={'status ' + (dispatch.clicked_at ? 'completed' : '')}>{dispatch.clicked_at ? `Clicou · ${date(dispatch.clicked_at)}` : 'Sem clique'}</span>
+                  </article>
+                );
+              })}
+            </div>
+          ) : <Empty text={loading ? 'Carregando resultados…' : 'Nenhum template de relacionamento enviado por esta conexão.'}/>}
+          {hasMore && <div style={{ padding: 18, textAlign: 'center' }}><button className="secondary" type="button" disabled={loading} onClick={loadMore}>{loading ? 'Carregando…' : 'Carregar contatos anteriores'}</button></div>}
+        </>
+      )}
+    </section>
+  );
 }
 function ApiSettings(){const [state,setState]=useState({loading:true,gptConfigured:false,kieConfigured:false,efiConfigured:false,efiEnvironment:'production'});const [notice,setNotice]=useState('');useEffect(()=>{fetch('/api/account-credentials').then(res=>res.ok?res.json():Promise.reject()).then(data=>setState({...data,loading:false})).catch(()=>{setState(old=>({...old,loading:false}));setNotice('Não foi possível consultar as credenciais.');});},[]);async function readP12(file){if(!file)return '';if(file.size>768*1024)throw new Error('O certificado P12 deve ter no máximo 768 KB.');return new Promise((resolve,reject)=>{const reader=new FileReader();reader.onerror=()=>reject(new Error('Não foi possível ler o certificado P12.'));reader.onload=()=>resolve(String(reader.result).split(',')[1]||'');reader.readAsDataURL(file);});}async function save(event){event.preventDefault();const formElement=event.currentTarget;setNotice('Salvando com segurança...');try{const form=new FormData(formElement);const response=await fetch('/api/account-credentials',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({gptKey:form.get('gptKey'),kieKey:form.get('kieKey'),efiClientId:form.get('efiClientId'),efiClientSecret:form.get('efiClientSecret'),efiCertificateP12:await readP12(form.get('efiCertificateP12')),efiCertificatePassword:form.get('efiCertificatePassword'),efiPixKey:form.get('efiPixKey'),efiEnvironment:form.get('efiEnvironment')})});const data=await response.json();if(!response.ok)return setNotice(data.error||'Não foi possível salvar as credenciais.');formElement.reset();setState(old=>({...old,...data}));setNotice('Credenciais criptografadas e salvas. Seus fluxos já podem usá-las.');}catch(error){setNotice(error.message||'Não foi possível salvar as credenciais.');}}return <section className="api-page"><div className="api-intro"><p className="eyebrow">CREDENCIAIS PRIVADAS</p><h2>Suas APIs</h2><p>Cadastre as chaves uma única vez. Elas pertencem somente à sua conta e são usadas por todos os seus fluxos.</p></div><form className="api-form" onSubmit={save}><article className="api-provider"><div className="api-provider-icon gpt">GPT</div><div><h3>OpenAI / GPT</h3><p>Usada pelos blocos de IA para conversar, analisar informações e validar comprovantes.</p><span className={state.gptConfigured?'api-status ready':'api-status'}>{state.loading?'Verificando...':state.gptConfigured?'Chave configurada':'Chave não configurada'}</span></div><label>Chave da API GPT<input name="gptKey" type="password" placeholder={state.gptConfigured?'Digite somente para substituir':'sk-...'} autoComplete="new-password"/></label></article><article className="api-provider"><div className="api-provider-icon kie">K</div><div><h3>Kie.ai</h3><p>Usada pelo bloco Gerar música. O texto, estilo e voz vêm do site e do seu fluxo.</p><span className={state.kieConfigured?'api-status ready':'api-status'}>{state.loading?'Verificando...':state.kieConfigured?'Chave configurada':'Chave não configurada'}</span></div><label>Chave da API Kie.ai<input name="kieKey" type="password" placeholder={state.kieConfigured?'Digite somente para substituir':'Cole sua chave da Kie.ai'} autoComplete="new-password"/></label></article><article className="api-provider"><div className="api-provider-icon efi">PIX</div><div><h3>Efi Pix</h3><p>Usada pelo card Gerar PIX copia e cola. A Efi exige Client ID, Client Secret, certificado P12 e uma chave Pix da mesma conta.</p><span className={state.efiConfigured?'api-status ready':'api-status'}>{state.loading?'Verificando...':state.efiConfigured?'Efi configurada':'Efi não configurada'}</span></div><label>Ambiente<select name="efiEnvironment" defaultValue={state.efiEnvironment||'production'}><option value="production">Produção</option><option value="homologation">Homologação</option></select></label><label>Client ID<input name="efiClientId" type="password" placeholder="Digite somente para configurar ou substituir" autoComplete="new-password"/></label><label>Client Secret<input name="efiClientSecret" type="password" placeholder="Digite somente para configurar ou substituir" autoComplete="new-password"/></label><label>Certificado Efi (.p12)<input name="efiCertificateP12" type="file" accept=".p12,application/x-pkcs12"/></label><label>Senha do certificado (se houver)<input name="efiCertificatePassword" type="password" autoComplete="new-password"/></label><label>Chave Pix recebedora<input name="efiPixKey" placeholder="CPF, e-mail, telefone ou chave aleatória" autoComplete="off"/></label><small>Use as credenciais Pix com escopo <code>cob.write</code>. O certificado é cifrado no servidor e não será mostrado novamente.</small></article><div className="api-footer"><p>As chaves são criptografadas antes de serem gravadas e nunca são exibidas novamente.</p><button className="primary">Salvar APIs</button></div>{notice&&<p className="api-notice">{notice}</p>}</form></section>}
 function Webhooks({origin,connections}){const connectionId=connections[0]?.id||'ID_DA_CONEXAO';return <section className="webhook-grid"><article className="webhook-card"><p className="eyebrow">GUIA RÁPIDO</p><h2>O que configurar</h2><ol className="tutorial-list"><li><b>Conexões:</b> conecte o WhatsApp e escolha Meta ou UazAPI em <b>Canal para todas as versões do site</b>. A chave <code>WHATSENTREGAVEL_INTEGRATION_KEY</code> continua a mesma.</li><li><b>APIs:</b> configure GPT e Kie.ai na aba <b>APIs</b>.</li><li><b>Disparos:</b> selecione os fluxos de prévia pronta e geração de música.</li><li><b>Site:</b> envie a chave <code>integration_key</code> no webhook a partir do backend do site.</li></ol><p>Para pagamento aprovado use <code>fulfillment.mode</code> como <code>deliver_existing_preview_audio</code> ou <code>generate_music_in_miniflux</code>.</p></article><article className="webhook-card"><p className="eyebrow">PAGAMENTO APROVADO</p><h2>Webhook de pagamento</h2><p>O canal é escolhido em Conexões e os fluxos em Disparos. A prévia pronta deve incluir as duas URLs em <code>preview.audios</code>.</p><label>URL<input readOnly value={`${origin}/api/webhooks/payment`}/></label><label>Header<input readOnly value="x-payment-secret: seu PAYMENT_WEBHOOK_SECRET"/></label></article><article className="webhook-card"><p className="eyebrow">EXEMPLO COM PRÉVIA</p><pre>{JSON.stringify({event:'PAYMENT_APPROVED',connection_id:connectionId,order_id:'pedido_123',customer:{name:'Ana Martins',phone:'5511999999999'},preview:{task_id:'kie_task_123',audios:['https://arquivo.com/preview-1.mp3','https://arquivo.com/preview-2.mp3']}},null,2)}</pre></article></section>}
