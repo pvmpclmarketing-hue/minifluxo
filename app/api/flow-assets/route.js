@@ -8,6 +8,7 @@ const mediaTypes = {
   'image/jpeg': { kind: 'image', extension: 'jpg', maxBytes: 5 * 1024 * 1024 },
   'image/png': { kind: 'image', extension: 'png', maxBytes: 5 * 1024 * 1024 },
   'video/mp4': { kind: 'video', extension: 'mp4', maxBytes: 70 * 1024 * 1024 },
+  'audio/ogg': { kind: 'voice', extension: 'ogg', maxBytes: 16 * 1024 * 1024 },
 };
 
 export async function POST(request) {
@@ -15,10 +16,10 @@ export async function POST(request) {
     const user = await requireUser();
     const { contentType, size } = await request.json();
     const media = mediaTypes[String(contentType || '').toLowerCase()];
-    if (!media) return NextResponse.json({ error: 'Use JPG, PNG ou vídeo MP4.' }, { status: 400 });
+    if (!media) return NextResponse.json({ error: 'Use JPG, PNG, vídeo MP4 ou áudio OGG/Opus.' }, { status: 400 });
     if (!Number.isFinite(Number(size)) || Number(size) < 1 || Number(size) > media.maxBytes) {
-      const limit = media.kind === 'video' ? '70 MB' : '5 MB';
-      return NextResponse.json({ error: `${media.kind === 'video' ? 'O vídeo' : 'A imagem'} deve ter no máximo ${limit}.` }, { status: 400 });
+      const limit = media.kind === 'video' ? '70 MB' : media.kind === 'voice' ? '16 MB' : '5 MB';
+      return NextResponse.json({ error: `O arquivo deve ter no máximo ${limit}.` }, { status: 400 });
     }
 
     const path = `${user.id}/flow-media/${randomUUID()}.${media.extension}`;

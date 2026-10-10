@@ -1,7 +1,7 @@
 import https from 'https';
 import { createHash } from 'crypto';
 import { decryptSecret, hashSecret } from './connection-secrets';
-import { sendAudio, sendMedia, sendMenu, sendPixCopyButton, sendText } from './provider';
+import { sendAudio, sendMedia, sendMenu, sendPixCopyButton, sendText, sendVoiceNote } from './provider';
 import { dispatchRemotionRender } from '../../lib/remotion/dispatch';
 import { createSyncedCaptionBlocks } from '../../lib/lyric-video/sync-lyrics';
 import { appendChatMessage } from './chat-history';
@@ -253,6 +253,26 @@ async function sendFlowMedia(db,flow,lead,connection,node,variables,{waitForVide
   return updated;
 }
 
+async function sendFlowVoice(db,flow,lead,connection,node){
+  const config=node.data?.config||{};
+  const storageUrl=String(config.audioUrl||'').trim();
+  const prefix=`storage://video-inputs/${flow.owner_id}/flow-media/`;
+  if(!storageUrl.startsWith(prefix)||!String(config.fileName||'').toLowerCase().endsWith('.ogg'))throw new Error('Envie um áudio OGG/Opus neste card antes de salvar o fluxo.');
+  const path=storageUrl.slice('storage://video-inputs/'.length);
+  const {data,error}=await db.storage.from('video-inputs').createSignedUrl(path,60*60*12);
+  if(error||!data?.signedUrl)throw error||new Error('Não foi possível acessar o áudio deste card.');
+  const result=await sendVoiceNote(connection,lead.phone,data.signedUrl);
+  const messageId=String(result?.messages?.[0]?.id||result?.data?.messages?.[0]?.id||`voice-${node.id}-${Date.now()}`);
+  const currentLead=await appendChatMessage(db,lead,{id:messageId,direction:'out',type:'audio',url:data.signedUrl,text:'🎙️ Mensagem de voz enviada'});
+  const context=currentLead.order_context||{};
+  const saveTo=/^[a-zA-Z0-9_.]+$/.test(config.saveTo||'voice')?config.saveTo||'voice':'voice';
+  const flowData=setAt(context.flow_data,saveTo,{type:'voice',file_name:String(config.fileName||''),sent_at:new Date().toISOString(),message_id:messageId});
+  const delivery={...(context.delivery||{}),message_ids:{...(context.delivery?.message_ids||{}),[`voice:${node.id}`]:{id:messageId,status:'sent',sent_at:new Date().toISOString(),type:'voice'}},voice:{...(context.delivery?.voice||{}),[node.id]:{id:messageId,type:'voice',url:data.signedUrl,sent_at:new Date().toISOString()}}};
+  const {data:updated,error:updateError}=await db.from('leads').update({order_context:{...context,delivery,flow_data:flowData,flow_execution:null},status:'in_progress',updated_at:new Date().toISOString()}).eq('id',currentLead.id).eq('owner_id',currentLead.owner_id).eq('connection_id',connection.id).select().single();
+  if(updateError)throw updateError;
+  return updated;
+}
+
 export async function executeFlow({db,flow,lead,connection,resumeAfterId=null,resumeHandle=null,startAtId=null,audios=[]}){
   assertExecutionScope(flow,lead,connection);
   if(lead.status==='timed_out')return {completed:false,reason:'execution_timed_out'};
@@ -285,6 +305,10 @@ export async function executeFlow({db,flow,lead,connection,resumeAfterId=null,re
       // dele na conversa; o webhook retoma a partir deste card exatamente uma
       // vez, mesmo quando chegarem recibos delivered/read adicionais.
       if(waitsForVideoReceipt)return {waiting:true,reason:'media_delivery_receipt',message_id:currentLead.order_context?.flow_execution?.media_message_id||null};
+      variables=variablesFor(currentLead,{audios:readyAudios});
+    }
+    if(kind==='voice'){
+      currentLead=await sendFlowVoice(db,flow,currentLead,connection,node);
       variables=variablesFor(currentLead,{audios:readyAudios});
     }
     if(kind==='deliver'||kind==='previewDeliver'){

@@ -105,6 +105,13 @@ export async function sendAudio(connection,phone,audioUrl,caption=''){
   return uazSendWithPhoneFallback(connection,phone,'/send/media',{type:'audio',file:audioUrl,text:caption});
 }
 
+export async function sendVoiceNote(connection,phone,audioUrl){
+  if(!connection)throw new Error('Conecte um WhatsApp antes de enviar a mensagem de voz.');
+  if(!/^https:\/\//i.test(String(audioUrl)))throw new Error('A URL do áudio precisa ser HTTPS.');
+  if(connection.provider==='meta')return sendOfficialWhatsApp({messaging_product:'whatsapp',to:phone,type:'audio',audio:{link:audioUrl}});
+  return uazSendWithPhoneFallback(connection,phone,'/send/media',{type:'ptt',file:audioUrl});
+}
+
 export async function sendMedia(connection,phone,type,mediaUrl,caption=''){
   if(!connection)throw new Error('Conecte um WhatsApp antes de enviar a mídia.');
   if(!['image','video'].includes(type))throw new Error('Tipo de mídia inválido.');
