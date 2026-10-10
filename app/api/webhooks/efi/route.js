@@ -42,7 +42,7 @@ export async function POST(request) {
     const txid = String(payment?.txid || '').trim();
     if (!txid) continue;
     const { data: charge } = await db.from('efi_pix_charges').select('*').eq('txid', txid).eq('status', 'pending').maybeSingle();
-    if (!charge) { processed.push({ txid, ignored: true }); continue; }
+    if (!charge) { processed.push({ txid, ignored: true, reason: 'charge_not_pending' }); continue; }
     const now = new Date().toISOString();
     // O payload recebido da Efí descreve somente o pagamento. Preserve os
     // metadados criados junto com a cobrança (em especial
@@ -95,11 +95,25 @@ export async function POST(request) {
     }
     try {
       // A API oficial só permite o envio de áudio e vídeo livres depois de uma
-      // mensagem recebida do cliente. Todo Pix Efí pago passa primeiro pelo
-      // template aprovado; o webhook da resposta recomeça o fluxo dentro da
-      // janela de 24 horas. Isto também impede que a Kie/entrega seja iniciada
-      // diretamente por um pagamento fora da janela.
+      // mensagem recebida do cliente. Se a janela de atendimento ainda estiver
+      // aberta, a resposta recente que levou ao Pix já autoriza continuar o
+      // fluxo após o card de pagamento, sem pedir uma segunda confirmação.
+      const chatMessages = Array.isArray(paidLead.order_context?.chat_messages)
+        ? paidLead.order_context.chat_messages
+        : [];
+      const lastInboundAt = chatMessages.reduce((latest, message) => {
+        if (message?.direction !== 'in') return latest;
+        const timestamp = Date.parse(message.created_at || '');
+        return Number.isFinite(timestamp) && timestamp > latest ? timestamp : latest;
+      }, 0);
+      const customerServiceWindowOpen = lastInboundAt > 0 && Date.now() - lastInboundAt < 24 * 60 * 60 * 1000;
       if (connection.provider === 'meta') {
+        if (paymentNodeId && customerServiceWindowOpen) {
+          const audios = Array.isArray(paidLead.order_context?.preview_audios) ? paidLead.order_context.preview_audios : [];
+          const result = await executeFlow({ db, flow, lead: paidLead, connection, audios, resumeAfterId: paymentNodeId });
+          processed.push({ txid, ok: true, site_payment: sitePayment, resumed_within_customer_window: true, result });
+          continue;
+        }
         const phone = String(paidLead.phone || paidLead.phone_number || '').replace(/\D/g, '');
         if (!phone) {
           processed.push({ txid, queued: true, reason: 'Pagamento confirmado, mas o lead não possui telefone para o template.' });
@@ -150,5 +164,9 @@ export async function POST(request) {
       processed.push({ txid, error: error?.message || 'Fluxo falhou.' });
     }
   }
+  console.info('[efi webhook] processed', {
+    count: processed.length,
+    outcomes: processed.map((item) => item.error ? 'error' : item.ignored ? 'ignored' : item.duplicate ? 'duplicate' : item.waiting_for_template_reply ? 'waiting_for_reply' : item.ok ? 'ok' : item.queued ? 'queued' : 'unknown'),
+  });
   return NextResponse.json({ received: true, processed });
 }
