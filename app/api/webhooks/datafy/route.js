@@ -31,6 +31,16 @@ function incomingText(message) {
   return '';
 }
 
+function matchesTemplateQuickReply(message, expectedLabel) {
+  const normalize = (value) => String(value || '').trim().toLocaleLowerCase('pt-BR');
+  const options = message?.type === 'button'
+    ? [message.button?.text, message.button?.payload]
+    : message?.type === 'interactive'
+      ? [message.interactive?.button_reply?.title, message.interactive?.button_reply?.id]
+      : [];
+  return options.some((value) => normalize(value) === normalize(expectedLabel));
+}
+
 async function trackDeliveryStatus(db,connection,status){
   const messageId=String(status?.id||'');if(!messageId)return {ignored:true,reason:'status_without_message_id'};
   const {data:leads,error}=await db.from('leads').select('*').eq('connection_id',connection.id).order('updated_at',{ascending:false}).limit(500);
@@ -94,6 +104,32 @@ async function resumeMessage(db, connection, message, contact) {
   const execution = context.flow_execution || {};
   const { data: flow } = await db.from('flows').select('*').eq('id', execution.flow_id).eq('owner_id', existing.owner_id).maybeSingle();
   if (!flow?.status || flow.status !== 'active') return { ignored: true, reason: 'flow_unavailable' };
+
+  // Um template de convite não inicia o curso ao ser apenas entregue ou lido.
+  // Somente o clique no botão aprovado "Quero Sim" autoriza a primeira etapa.
+  if (execution.template_trigger === 'relacioanamento') {
+    if (!matchesTemplateQuickReply(message, 'Quero Sim')) {
+      return { received: true, ignored: true, reason: 'template_quick_reply_required' };
+    }
+    const sentMessageId = String(execution.template_message_id || '');
+    const repliedMessageId = String(message?.context?.id || '');
+    if (sentMessageId && repliedMessageId && sentMessageId !== repliedMessageId) {
+      return { received: true, ignored: true, reason: 'different_template_reply' };
+    }
+    const { data: claimed, error: claimError } = await db.from('leads').update({
+      status: 'in_progress',
+      order_context: {
+        ...context,
+        flow_execution: null,
+        template_trigger: { ...(context.template_trigger || {}), clicked_at: new Date().toISOString(), button: 'Quero Sim' },
+      },
+      updated_at: new Date().toISOString(),
+    }).eq('id', existing.id).eq('owner_id', existing.owner_id).eq('connection_id', connection.id)
+      .in('status', resumableStatus).select().maybeSingle();
+    if (claimError) throw claimError;
+    if (!claimed) return { received: true, ignored: true, reason: 'template_response_already_claimed' };
+    return executeFlow({ db, flow, lead: claimed, connection });
+  }
 
   // A resposta ao template aprovado abre a janela de 24 horas. Para uma
   // confirmação Pix que já possui `payment_node_id`, retomamos exatamente
