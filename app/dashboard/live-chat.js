@@ -5,6 +5,8 @@ const preview=item=>item.messages?.at(-1)?.text||'Conversa iniciada pelo fluxo';
 export default function LiveChat(){
   const [items,setItems]=useState([]),[selectedId,setSelectedId]=useState(''),[query,setQuery]=useState(''),[text,setText]=useState(''),[loading,setLoading]=useState(true),[sending,setSending]=useState(false),[cleaning,setCleaning]=useState(false),[error,setError]=useState('');const bottom=useRef(null);
   const load=async(silent=false)=>{try{const r=await fetch('/api/chat',{cache:'no-store'});const d=await r.json();if(!r.ok)throw new Error(d.error);setItems(d.conversations||[]);setSelectedId(current=>current||(d.conversations?.[0]?.id||''));}catch(e){if(!silent)setError(e.message)}finally{if(!silent)setLoading(false)}};
+  // Busca inicial e polling sincronizam o estado com a API; a atualização ocorre após o fetch assíncrono.
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(()=>{load();const id=window.setInterval(()=>load(true),5000);return()=>window.clearInterval(id)},[]);
   const visible=useMemo(()=>items.filter(item=>`${item.name} ${item.phone}`.toLowerCase().includes(query.toLowerCase())),[items,query]);const selected=items.find(item=>item.id===selectedId)||visible[0];
   useEffect(()=>{bottom.current?.scrollIntoView({block:'end'})},[selectedId,selected?.messages?.length]);
