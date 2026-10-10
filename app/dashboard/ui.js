@@ -100,7 +100,7 @@ function Dispatches({connections,flows,configs,save}){
   const reserves=connections.filter(connection=>connection.provider==='uazapi');
   if(!connections.length)return <Empty text="Conecte um WhatsApp Meta ou UazAPI antes de configurar os disparos."/>;
   const fallback=configs.find(item=>item.payment_generation_flow_id||item.payment_preview_flow_id||item.site_flow_id)||{};
-  return <><RelationshipTracking connections={connections}/><section className="dispatch-list">{connections.map(connection=>{
+  return <><RelationshipCampaignForm connections={connections} configs={configs} flows={flows}/><RelationshipTracking connections={connections}/><section className="dispatch-list">{connections.map(connection=>{
     const config=configs.find(item=>item.connection_id===connection.id)||fallback;
     return <form key={connection.id} className="dispatch-card" onSubmit={save}>
       <input type="hidden" name="connection_id" value={connection.id}/>
@@ -114,6 +114,75 @@ function Dispatches({connections,flows,configs,save}){
       <button className="primary">Salvar disparos</button>
     </form>;
   })}</section></>;
+}
+function RelationshipCampaignForm({connections,configs,flows}) {
+  const metaConnections = connections.filter(item => item.provider === 'meta' && item.status === 'connected');
+  const [selectedConnectionId, setSelectedConnectionId] = useState('');
+  const connectionId = metaConnections.some(item => item.id === selectedConnectionId)
+    ? selectedConnectionId
+    : metaConnections[0]?.id || '';
+  const [phoneText, setPhoneText] = useState('');
+  const [campaignId, setCampaignId] = useState('');
+  const [sending, setSending] = useState(false);
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState('');
+  const recipients = useMemo(() => {
+    const tokens = phoneText.split(/[\s,;]+/).map(value => value.trim()).filter(Boolean);
+    const normalized = tokens.map(value => {
+      const digits = value.replace(/\D/g, '');
+      return digits.length === 10 || digits.length === 11 ? `55${digits}` : digits;
+    });
+    const valid = normalized.filter(phone => /^55\d{10,11}$/.test(phone));
+    return { phones: [...new Set(valid)], invalid: tokens.length - valid.length };
+  }, [phoneText]);
+  const config = configs.find(item => item.connection_id === connectionId);
+  const templateName = config?.relationship_template_name || '';
+  const flowName = flows.find(item => item.id === config?.relationship_flow_id)?.name || '';
+
+  async function dispatch(event) {
+    event.preventDefault();
+    setError('');
+    if (!connectionId || !templateName) return setError('Configure o template de relacionamento na conexão Meta antes de enviar.');
+    if (!recipients.phones.length || recipients.invalid || recipients.phones.length > 100) return setError('Informe de 1 a 100 números brasileiros válidos. Números sem DDI recebem o prefixo 55.');
+    if (!window.confirm(`Enviar o template “${templateName}” pela conexão Meta para ${recipients.phones.length} contatos? O fluxo ${flowName || 'configurado'} só inicia quando a pessoa clicar em “Quero Sim”.`)) return;
+    const requestId = campaignId || crypto.randomUUID();
+    setCampaignId(requestId);
+    setSending(true);
+    try {
+      const response = await fetch('/api/dispatches/relationship', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ connection_id: connectionId, campaign_id: requestId, recipients: recipients.phones }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Não foi possível enviar o template.');
+      setResult(data);
+      setPhoneText('');
+    } catch (dispatchError) {
+      setError(dispatchError.message || 'Não foi possível confirmar o resultado do disparo.');
+    } finally {
+      setSending(false);
+    }
+  }
+
+  if (!metaConnections.length) return null;
+  return (
+    <section className="table-card">
+      <div className="table-head"><div><h2>Enviar template de relacionamento</h2><small>O Curso só começa se o contato clicar em “Quero Sim”.</small></div></div>
+      <form className="dispatch-card relationship-campaign" onSubmit={dispatch}>
+        {metaConnections.length > 1 && <label>Conexão Meta<select value={connectionId} onChange={event => setSelectedConnectionId(event.target.value)}>{metaConnections.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>}
+        <label>Template aprovado<input value={templateName || 'Configure o template na conexão Meta'} readOnly/></label>
+        <label>Contatos do WhatsApp<textarea value={phoneText} onChange={event => setPhoneText(event.target.value)} rows={6} placeholder="Cole um número por linha, com ou sem DDI"/></label>
+        <small>{recipients.phones.length} números únicos válidos{recipients.invalid ? ` · ${recipients.invalid} inválidos` : ''}. O máximo por disparo é 100.</small>
+        {error && <p className="form-error">{error}</p>}
+        {result && <p className="api-notice">Campanha concluída: {result.sent} enviados, {result.failed} falharam, {result.duplicates} já registrados. Acompanhe entrega, leitura e cliques abaixo.</p>}
+        <div className="relationship-campaign-actions">
+          <button className="primary" disabled={sending || !templateName || !recipients.phones.length || recipients.invalid > 0 || recipients.phones.length > 100 || Boolean(result)}>{sending ? 'Enviando…' : 'Enviar template agora'}</button>
+          {result && <button className="secondary" type="button" onClick={() => { setResult(null); setCampaignId(crypto.randomUUID()); }}>Nova campanha</button>}
+        </div>
+      </form>
+    </section>
+  );
 }
 function RelationshipTracking({connections}) {
   const [records, setRecords] = useState([]);
