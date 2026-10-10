@@ -12,7 +12,7 @@ const render=(text,variables)=>String(text||'').replace(/\{([^}]+)\}/g,(_,path)=
 const PURCHASE_NOTIFICATION_PHONE='5522998951446';
 const nextNode=(nodes,edges,nodeId,sourceHandle=null)=>{const matches=edges.filter(edge=>edge.source===nodeId);const selected=sourceHandle?matches.find(edge=>edge.sourceHandle===sourceHandle):matches.find(edge=>!edge.sourceHandle)||matches[0];return nodes.find(node=>node.id===selected?.target)||null;};
 const modelName=value=>({ 'Suno V5':'V5','Suno V4.5':'V4_5' }[value]||value||'V5');
-const delayMilliseconds=config=>{const amount=Math.max(1,Number(config.duration)||1);const multiplier={minutos:60000,horas:3600000,dias:86400000}[config.unit]||60000;return amount*multiplier;};
+const delayMilliseconds=config=>{const amount=Math.max(1,Number(config.duration)||1);const multiplier={segundos:1000,minutos:60000,horas:3600000,dias:86400000}[config.unit]||60000;return amount*multiplier;};
 const KIE_RETRY_DELAYS_MS=[2*60*1000,5*60*1000];
 const KIE_TERMINAL_STATUSES=new Set(['SENSITIVE_WORD_ERROR']);
 const kieFailureMessage=(task,fallback='A Kie.ai não conseguiu gerar o áudio desta música.')=>String(task?.errorMessage||task?.message||fallback).trim().slice(0,500);
