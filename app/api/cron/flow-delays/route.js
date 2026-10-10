@@ -1,10 +1,31 @@
-import { NextResponse } from 'next/server';
+import { after, NextResponse } from 'next/server';
 import { adminClient } from '../../supabase';
 import { executeFlow, recoverKieGeneration, retryKieDelivery } from '../../flow-engine';
 import { sendTemplate } from '../../provider';
 import { appendChatMessage } from '../../chat-history';
 import { paymentTemplate, recoveryTemplate, remarketingTemplate } from '../../whatsapp-templates';
 import { resolveSiteDispatchConnection, resolveSiteFlowConfig } from '../../site-connection';
+import { inspectDatafyConnection } from '../../datafy-connection';
+
+async function activateVerifiedDatafyConnection(db) {
+  const { data: officialConnections, error } = await db.from('connections')
+    .select('id,owner_id,status').eq('provider', 'meta').limit(2);
+  if (error) throw error;
+  // Não associamos um mesmo token a várias conexões nem substituímos uma
+  // conexão já ativa. Nesse caso é necessária uma escolha explícita no painel.
+  if (officialConnections?.length !== 1 || officialConnections[0].status === 'connected') return;
+  const health = await inspectDatafyConnection();
+  if (!health.connected) {
+    console.warn('[datafy activation] pending', { reason: health.reason });
+    return;
+  }
+  const connection = officialConnections[0];
+  const { error: updateError } = await db.from('connections')
+    .update({ status: 'connected' })
+    .eq('id', connection.id).eq('owner_id', connection.owner_id).eq('provider', 'meta').eq('status', 'disconnected');
+  if (updateError) throw updateError;
+  console.info('[datafy activation] verified official number connected');
+}
 
 export async function POST(request) {
   // Em instalações antigas o segredo exclusivo do cron pode não existir. O
@@ -33,6 +54,10 @@ export async function POST(request) {
       .filter((id) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)),
   )].slice(0, 25);
   const db = adminClient();
+  after(async () => {
+    try { await activateVerifiedDatafyConnection(db); }
+    catch (error) { console.error('[datafy activation] failed', { error: error.message }); }
+  });
   const now = Date.now();
   const timeoutHours = Math.max(1, Number(process.env.FLOW_EXECUTION_TIMEOUT_HOURS || 24));
   const timeoutAt = new Date(now - timeoutHours * 60 * 60 * 1000).toISOString();
