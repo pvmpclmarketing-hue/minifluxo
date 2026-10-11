@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { adminClient, requireUser } from '../../../supabase';
-import { configureGlobalUazWebhook, tokenForConnection, uazGet } from '../../../uazapi';
+import { configureGlobalUazWebhook, tokenForConnection, uazConnectionState, uazGet } from '../../../uazapi';
 
 export async function GET(_request,{params}) {
   try {
@@ -11,8 +11,10 @@ export async function GET(_request,{params}) {
     // instâncias já existentes continuam chegando mesmo após atualizações.
     await configureGlobalUazWebhook();
     const remote=await uazGet(await tokenForConnection(db,connection),'/instance/status');
-    const connected=Boolean(remote.status?.connected||remote.connected||remote.loggedIn);
-    const status=connected?'connected':connection.status==='connected'?'disconnected':connection.status;
+    const connected=uazConnectionState(remote);
+    // Respostas sem um estado explícito (ou com formatos novos da API) não
+    // devem rebaixar uma conexão que já estava marcada como ativa.
+    const status=connected===true?'connected':connected===false?'disconnected':connection.status;
     const {data:updated, error:updateError}=await db.from('connections').update({status}).eq('id',id).select().single();
     if(updateError)throw updateError;return NextResponse.json(updated);
   }catch(error){return NextResponse.json({error:error.message},{status:500});}

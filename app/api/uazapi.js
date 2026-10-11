@@ -24,6 +24,38 @@ async function call(path,options){
   }
   throw lastError;
 }
+const connectionStateKeys=new Set(['status','state','connection','connectionstatus','connection_status','instancestatus','instance_status','connected','isconnected','is_connected','loggedin','logged_in','authenticated','online']);
+const connectedStates=new Set(['connected','open','online','ready','authenticated','logged_in','loggedin']);
+const disconnectedStates=new Set(['disconnected','closed','close','offline','logged_out','loggedout','unauthenticated','not_connected','notconnected']);
+function normalizeConnectionState(value){
+  if(typeof value==='boolean')return value;
+  if(typeof value==='string'){
+    const state=value.trim().toLowerCase().replace(/[\s-]+/g,'_');
+    if(connectedStates.has(state))return true;
+    if(disconnectedStates.has(state))return false;
+  }
+  return null;
+}
+export function uazConnectionState(payload){
+  const visit=(value,depth=0)=>{
+    if(!value||typeof value!=='object'||depth>8)return null;
+    for(const [key,item] of Object.entries(value)){
+      const normalizedKey=key.toLowerCase().replace(/[^a-z]/g,'');
+      if(connectionStateKeys.has(key.toLowerCase())||connectionStateKeys.has(normalizedKey)){
+        const state=normalizeConnectionState(item);
+        if(state!==null)return state;
+        if(item&&typeof item==='object'){
+          for(const nestedKey of ['connected','isConnected','is_connected','state','status','loggedIn','logged_in']){
+            if(Object.hasOwn(item,nestedKey)){const nestedState=normalizeConnectionState(item[nestedKey]);if(nestedState!==null)return nestedState;}
+          }
+        }
+      }
+    }
+    for(const item of Object.values(value)){const state=visit(item,depth+1);if(state!==null)return state;}
+    return null;
+  };
+  return visit(payload);
+}
 const isUnauthorized=error=>/^UazAPI: 401\b/.test(String(error?.message||''));
 async function adminCall(path,options){
   // UAZAPI_TOKEN era o nome usado pelas instalações anteriores. Mantemos a

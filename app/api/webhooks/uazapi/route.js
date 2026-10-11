@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { adminClient } from '../../supabase';
 import { hashSecret } from '../../connection-secrets';
 import { executeFlow, resolveMenuChoice } from '../../flow-engine';
+import { uazConnectionState } from '../../uazapi';
 
 const digits=value=>String(value||'').replace(/\D/g,'');
 const sameWhatsApp=(left,right)=>{const a=digits(left),b=digits(right);return Boolean(a&&b&&(a===b||(a.length>=8&&b.length>=8&&a.slice(-8)===b.slice(-8))));};
@@ -30,7 +31,6 @@ function eventToken(body){return body.token||body.instanceToken||body.data?.toke
 function eventInstanceName(body){const data=body.data||body;return body.instanceName||body.instance?.name||data.instanceName||data.instance?.name||data.instance||body.instance||'';}
 function contactName(body){const data=body.data||body;const chat=data.chat||data.data?.chat||{};const message=data.message||data.data?.message||{};const value=chat.lead_fullName||chat.lead_name||chat.name||chat.pushName||message.pushName||message.key?.pushName||data.pushName||'';return String(value).trim().slice(0,120);}
 function fromMe(body){const data=body.data||body;const message=data.message||data.data?.message||{};return !!(data.key?.fromMe||message.key?.fromMe||data.fromMe||message.fromMe||data.wasSentByApi);}
-function isConnected(body){const data=body.data||body;const value=data.status?.connected??data.connected??data.loggedIn??data.status??data.connection;return value===true||String(value||'').toLowerCase()==='connected'||String(value||'').toLowerCase()==='open';}
 
 export async function POST(request){
   try{
@@ -39,7 +39,7 @@ export async function POST(request){
     if(!connection&&instanceName){const result=await db.from('connections').select('*').eq('instance_name',instanceName).maybeSingle();connection=result.data;}
     console.info('[uazapi webhook]',{event,hasToken:Boolean(token),instanceName:instanceName||null,connectionMatched:Boolean(connection),hasPhone:Boolean(phone),hasName:Boolean(name),ownMessage,interactiveReply,textPreview:String(messageText(body)||'').slice(0,60),rootKeys:Object.keys(body).slice(0,12),dataKeys:Object.keys(body.data||{}).slice(0,12),chatKeys:Object.keys(body.chat||{}).slice(0,16),messageKeyKeys:Object.keys(body.message?.key||{}).slice(0,16)});
     if(!connection)return NextResponse.json({received:true,ignored:true});
-    if(event==='connection'){const status=isConnected(body)?'connected':'disconnected';await db.from('connections').update({status}).eq('id',connection.id);return NextResponse.json({received:true,connection:status});}
+    if(event==='connection'){const connected=uazConnectionState(body);if(connected===null)return NextResponse.json({received:true,ignored:true,reason:'connection_state_unrecognized'});const status=connected?'connected':'disconnected';await db.from('connections').update({status}).eq('id',connection.id);return NextResponse.json({received:true,connection:status});}
     if(!['messages','messages_update'].includes(event)||(ownMessage&&!interactiveReply))return NextResponse.json({received:true,ignored:true});
     const text=messageText(body);if(!phone)return NextResponse.json({received:true,ignored:true});
     const variants=phoneVariants(phone);
