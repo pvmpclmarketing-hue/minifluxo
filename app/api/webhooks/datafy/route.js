@@ -31,14 +31,15 @@ function incomingText(message) {
   return '';
 }
 
-function matchesTemplateQuickReply(message, expectedLabel) {
+function matchesTemplateQuickReply(message, expectedLabels) {
   const normalize = (value) => String(value || '').trim().toLocaleLowerCase('pt-BR');
+  const allowedLabels = new Set((Array.isArray(expectedLabels) ? expectedLabels : [expectedLabels]).map(normalize));
   const options = message?.type === 'button'
     ? [message.button?.text, message.button?.payload]
     : message?.type === 'interactive'
       ? [message.interactive?.button_reply?.title, message.interactive?.button_reply?.id]
       : [];
-  return options.some((value) => normalize(value) === normalize(expectedLabel));
+  return options.find((value) => allowedLabels.has(normalize(value))) || '';
 }
 
 async function trackDeliveryStatus(db,connection,status){
@@ -148,9 +149,10 @@ async function resumeMessage(db, connection, message, contact) {
   if (!flow?.status || flow.status !== 'active') return { ignored: true, reason: 'flow_unavailable' };
 
   // Um template de convite não inicia o curso ao ser apenas entregue ou lido.
-  // Somente o clique no botão aprovado "Quero Sim" autoriza a primeira etapa.
+  // Somente o clique em um botão de resposta aprovado autoriza a primeira etapa.
   if (['relationship', 'relacioanamento'].includes(execution.template_trigger)) {
-    if (!matchesTemplateQuickReply(message, 'Quero Sim')) {
+    const clickedButton = matchesTemplateQuickReply(message, ['Quero Sim', 'Quero Saber mais sobre isso']);
+    if (!clickedButton) {
       return { received: true, ignored: true, reason: 'template_quick_reply_required' };
     }
     const sentMessageId = String(execution.template_message_id || '');
@@ -163,9 +165,9 @@ async function resumeMessage(db, connection, message, contact) {
       order_context: {
         ...context,
         flow_execution: null,
-        template_trigger: { ...(context.template_trigger || {}), clicked_at: new Date().toISOString(), button: 'Quero Sim' },
+        template_trigger: { ...(context.template_trigger || {}), clicked_at: new Date().toISOString(), button: clickedButton },
         relationship_dispatch: ['relationship','relacioanamento'].includes(execution.template_trigger)
-          ? { ...(context.relationship_dispatch||{}), clicked_at: new Date().toISOString(), clicked_button: 'Quero Sim', click_message_id: String(message?.id||''), clicked_template_message_id: String(execution.template_message_id||'') }
+          ? { ...(context.relationship_dispatch||{}), clicked_at: new Date().toISOString(), clicked_button: clickedButton, click_message_id: String(message?.id||''), clicked_template_message_id: String(execution.template_message_id||'') }
           : context.relationship_dispatch,
       },
       updated_at: new Date().toISOString(),
