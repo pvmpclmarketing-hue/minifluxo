@@ -36,6 +36,16 @@ function normalizeRecipients(value) {
   return [...unique.values()];
 }
 
+function normalizeBrazilianPhone(value) {
+  const digits = String(value || '').replace(/\D/g, '');
+  return digits.length === 10 || digits.length === 11 ? `55${digits}` : digits;
+}
+
+function isUsefulContactName(value) {
+  const name = String(value || '').trim();
+  return Boolean(name) && !/^(contato de relacionamento|contato|sem nome)$/i.test(name);
+}
+
 export async function POST(request) {
   try {
     const user = await requireUser();
@@ -59,6 +69,22 @@ export async function POST(request) {
     const { data: flow, error: flowError } = await db.from('flows').select('*').eq('id', config.relationship_flow_id).eq('owner_id', user.id).eq('status', 'active').maybeSingle();
     if (flowError) throw flowError;
     if (!flow || !Array.isArray(flow.nodes) || !flow.nodes.length) return NextResponse.json({ error: 'O fluxo de relacionamento não está ativo ou não possui etapas.' }, { status: 409 });
+
+    const phoneCandidates = [...new Set(recipients.flatMap(({ phone }) => {
+      const national = phone.startsWith('55') ? phone.slice(2) : phone;
+      return [phone, `+${phone}`, national, `+${national}`];
+    }))];
+    const { data: knownContacts, error: contactsError } = await db.from('leads').select('phone,name,created_at')
+      .eq('owner_id', user.id).in('phone', phoneCandidates).order('created_at', { ascending: false });
+    if (contactsError) throw contactsError;
+    const namesByPhone = new Map();
+    for (const contact of knownContacts || []) {
+      const phone = normalizeBrazilianPhone(contact.phone);
+      if (!namesByPhone.has(phone) && isUsefulContactName(contact.name)) namesByPhone.set(phone, String(contact.name).trim().slice(0, 120));
+    }
+    const missingNames = recipients.filter(({ phone }) => !namesByPhone.has(normalizeBrazilianPhone(phone)));
+    if (missingNames.length) return NextResponse.json({ error: `Não encontrei nome cadastrado para ${missingNames.length} contato(s); nenhum número foi enviado. Atualize os nomes dos leads e tente novamente.` }, { status: 409 });
+    for (const recipient of recipients) recipient.name = namesByPhone.get(normalizeBrazilianPhone(recipient.phone));
 
     const results = [];
     for (const recipient of recipients) {
@@ -88,7 +114,7 @@ export async function POST(request) {
       if (insertError) throw insertError;
 
       try {
-        const sent = await sendTemplate(connection, recipient.phone, config.relationship_template_name, config.relationship_template_language || 'pt_BR');
+        const sent = await sendTemplate(connection, recipient.phone, config.relationship_template_name, config.relationship_template_language || 'pt_BR', [recipient.name]);
         const messageId = String(sent?.messages?.[0]?.id || '');
         const sentAt = new Date().toISOString();
         const updatedContext = {

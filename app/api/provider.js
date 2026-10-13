@@ -63,10 +63,11 @@ export async function sendText(connection,phone,text){
   if(connection.provider==='meta')return sendOfficialWhatsApp({messaging_product:'whatsapp',to:phone,type:'text',text:{body:text}});
   return uazSendWithPhoneFallback(connection,phone,'/send/text',{text});
 }
-export async function sendTemplate(connection,phone,name='flow',languageCode='en'){
+export async function sendTemplate(connection,phone,name='flow',languageCode='en',bodyParameters=[]){
   if(!connection)throw new Error('Conecte um WhatsApp antes de enviar o template.');
   if(connection.provider!=='meta')throw new Error('Templates aprovados só estão disponíveis na API oficial.');
-  return sendOfficialWhatsApp({messaging_product:'whatsapp',to:phone,type:'template',template:{name:String(name),language:{code:String(languageCode)}}});
+  const parameters=(Array.isArray(bodyParameters)?bodyParameters:[]).map(value=>({type:'text',text:String(value??'')}));
+  return sendOfficialWhatsApp({messaging_product:'whatsapp',to:phone,type:'template',template:{name:String(name),language:{code:String(languageCode)},...(parameters.length?{components:[{type:'body',parameters}]}:{})}});
 }
 export async function sendMenu(connection,phone,text,choices){
   if(!connection)throw new Error('Conecte um WhatsApp antes de enviar o menu.');
