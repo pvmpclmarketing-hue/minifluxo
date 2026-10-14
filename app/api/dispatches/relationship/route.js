@@ -114,7 +114,11 @@ export async function POST(request) {
       if (insertError) throw insertError;
 
       try {
-        const sent = await sendTemplate(connection, recipient.phone, config.relationship_template_name, config.relationship_template_language || 'pt_BR', [recipient.name]);
+        // The `to` template contains a first-name placeholder. The
+        // `relacioanamento` template is static and must receive no body
+        // parameters; Meta rejects an extra parameter with error 132000.
+        const bodyParameters = config.relationship_template_name === 'to' ? [recipient.name] : [];
+        const sent = await sendTemplate(connection, recipient.phone, config.relationship_template_name, config.relationship_template_language || 'pt_BR', bodyParameters);
         const messageId = String(sent?.messages?.[0]?.id || '');
         const sentAt = new Date().toISOString();
         const updatedContext = {
